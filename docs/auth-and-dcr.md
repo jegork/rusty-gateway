@@ -63,6 +63,19 @@ identity_providers:
         require_pkce: true
         pkce_challenge_method: S256
         access_token_signed_response_alg: RS256
+      - client_id: chatgpt
+        client_name: ChatGPT
+        client_secret: '$pbkdf2-sha512$...'
+        authorization_policy: two_factor
+        redirect_uris:
+          - https://chatgpt.com/connector_platform_oauth_redirect
+        scopes: [openid, offline_access, mcp:use]
+        audience: [https://gw.example]
+        grant_types: [authorization_code, refresh_token]
+        token_endpoint_auth_method: client_secret_post
+        require_pkce: true
+        pkce_challenge_method: S256
+        access_token_signed_response_alg: RS256
       - client_id: codex
         client_name: Codex CLI
         public: true
@@ -111,6 +124,8 @@ callback_url = "http://localhost:8432/oauth/callback"
 ```
 
 Then `codex mcp login personal`. Codex prefers CIMD and only falls back to DCR when the server does not advertise it, so once Authelia ships CIMD the pre-registered client block becomes optional.
+
+ChatGPT: Settings, Connectors, Create, MCP URL `https://gw.example/mcp/personal`, OAuth, Advanced settings, user-defined client, client id `chatgpt` plus the plaintext secret. Developer mode must be on for connectors that expose arbitrary tools; without it ChatGPT only uses the `search`/`fetch` deep-research contract. ChatGPT validates the connector on save, so wire Authelia and test with a CLI client first.
 
 ## If Authelia turns out to be unusable: what building DCR would take
 
