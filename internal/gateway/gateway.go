@@ -29,6 +29,7 @@ type Call struct {
 	Namespace string
 	Server    string
 	Tool      string
+	SessionID string
 	Args      json.RawMessage
 	Result    *mcp.CallToolResult
 	Err       error
@@ -147,7 +148,7 @@ func (g *Gateway) handler(namespace, server, tool string, u *supervisor.Upstream
 		})
 		if g.Observe != nil {
 			g.Observe(ctx, Call{
-				Namespace: namespace, Server: server, Tool: tool,
+				Namespace: namespace, Server: server, Tool: tool, SessionID: req.Session.ID(),
 				Args: args, Result: res, Err: err,
 				Duration: time.Since(started), Started: started,
 			})

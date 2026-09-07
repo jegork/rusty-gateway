@@ -24,6 +24,22 @@ Endpoints:
 - `POST|GET|DELETE /mcp/{namespace}` streamable HTTP MCP; tools are named `{server}__{tool}`
 - `GET /.well-known/oauth-protected-resource` RFC 9728 metadata
 - `GET /healthz` upstream states, pids and tool counts; 503 if any upstream is failed
+- `GET /audit?namespace=&server=&tool=&status=&since=24h&limit=100` recent tool calls (bearer required)
+
+## Audit log
+
+Every tool call is written to SQLite at `audit.path`, off the request path
+through a bounded buffer (rows are dropped and counted if it fills). Args and
+results are redacted before the row exists: keys matching
+`(?i)(token|key|secret|password|passwd|auth|credential)` are dropped, values
+that look like API keys, JWTs, bearer tokens or long hex/base64 runs are
+replaced, and JSON carried inside text content is scrubbed recursively.
+Payloads are capped at `audit.max_payload_kb`; the true result size is kept.
+Rows older than `audit.retention_days` are pruned daily.
+
+```sh
+./gateway audit tail -config gateway.toml -n 50 -f
+```
 
 ## Auth
 
@@ -50,7 +66,7 @@ non-failed upstreams regardless of client sessions.
 | M0 proxy tools/list and tools/call over stdio | done |
 | M1 supervisor: process groups, restart, health, clean shutdown | done |
 | M2 namespaces, TOML config, streamable HTTP, tool prefixing | done |
-| M3 audit log in SQLite | not started; `Gateway.Observe` is the hook |
+| M3 audit log: schema, redaction, buffered writer, read API, retention | done |
 | M4 auth: protected resource metadata, JWKS, static token | done |
 | M5 ops: Dockerfile, RSS metrics, memory limit | not started |
 

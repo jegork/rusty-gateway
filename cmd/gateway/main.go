@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jegork/rusty-gateway/internal/audit"
 	"github.com/jegork/rusty-gateway/internal/auth"
 	"github.com/jegork/rusty-gateway/internal/config"
 	"github.com/jegork/rusty-gateway/internal/gateway"
@@ -23,6 +24,13 @@ import (
 var version = "dev"
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "audit" {
+		if err := runAudit(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	cfgPath := flag.String("config", "gateway.toml", "path to TOML config")
 	debug := flag.Bool("debug", false, "debug logging")
 	flag.Parse()
@@ -74,22 +82,27 @@ func run(cfgPath string, log *slog.Logger) error {
 		OnChange: func(id string) { gw.Refresh(id) },
 	})
 	gw = gateway.New(sup, namespaces, version, log)
-	gw.Observe = func(_ context.Context, c gateway.Call) {
-		status := "ok"
-		if c.Err != nil {
-			status = "error"
-		} else if c.Result != nil && c.Result.IsError {
-			status = "tool_error"
+
+	mux := http.NewServeMux()
+	if cfg.Audit.Path == "" {
+		log.Warn("audit.path not set, tool calls are not being recorded")
+	} else {
+		store, err := audit.Open(cfg.Audit.Path)
+		if err != nil {
+			return fmt.Errorf("open audit db: %w", err)
 		}
-		log.Info("tool call", "namespace", c.Namespace, "server", c.Server, "tool", c.Tool,
-			"status", status, "duration_ms", c.Duration.Milliseconds())
+		defer store.Close()
+		sink := audit.NewSink(store, audit.SinkOptions{MaxPayloadBytes: cfg.Audit.MaxPayloadKB * 1024, Logger: log})
+		defer sink.Close()
+		gw.Observe = sink.Observe
+		go audit.Retention(ctx, store, time.Duration(cfg.Audit.RetentionDays)*24*time.Hour, log)
+		mux.Handle("GET /audit", authn.Middleware()(audit.Handler(store)))
 	}
 
 	sup.Start(ctx)
 	gw.RefreshAll()
 	defer sup.Stop()
 
-	mux := http.NewServeMux()
 	mux.Handle("/mcp/{ns}", authn.Middleware()(gw.Handler()))
 	mux.Handle(auth.MetadataPath, authn.MetadataHandler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {

@@ -2,7 +2,7 @@
 
 A single-user MCP aggregator in Go. Replaces MetaMCP for a one-person deployment: namespaced endpoints over stdio upstreams, OAuth-protected, with a real audit log.
 
-**Status:** M0–M2 and M4 implemented · **Language:** Go · **Storage:** SQLite · **Date:** 2026-09-07
+**Status:** M0–M4 implemented · **Language:** Go · **Storage:** SQLite · **Date:** 2026-09-07
 
 ---
 
@@ -77,7 +77,7 @@ The decisive simplification is **dropping multi-tenancy**. MetaMCP allocates per
 2. **Supervisor** (`internal/supervisor`) — owns the child process table. Start, health-check, restart with backoff, shut down cleanly.
 3. **Namespace router + dispatcher** (`internal/gateway`) — one MCP server endpoint per namespace, exposing the merged tool list of that namespace's upstreams; resolves a prefixed tool name to an upstream and forwards the call.
 4. **Auth middleware** (`internal/auth`) — validate bearer tokens against the IdP's JWKS; serve protected-resource metadata.
-5. **Audit sink** — buffered writes to SQLite, off the request path. Not yet implemented; `Gateway.Observe` is the hook.
+5. **Audit sink** (`internal/audit`, `internal/redact`) — buffered writes to SQLite, off the request path, fed through `Gateway.Observe`.
 
 ---
 
@@ -89,8 +89,7 @@ The decisive simplification is **dropping multi-tenancy**. MetaMCP allocates per
 | HTTP server | `net/http` (stdlib) | Go 1.22+ pattern routing covers `/mcp/{ns}`. |
 | Token validation | `github.com/coreos/go-oidc/v3/oidc` | `NewProvider` handles OIDC discovery and JWKS fetch/cache/rotation. |
 | SQLite driver | `modernc.org/sqlite` | Pure Go, no cgo — preserves the single static binary and cross-compilation. |
-| Typed queries | `github.com/sqlc-dev/sqlc` | Generates Go from SQL at build time. |
-| Migrations | `github.com/pressly/goose/v3` | Embeds migrations via `embed.FS`; runs on startup. |
+| Queries and schema | `database/sql` with an embedded `schema.sql` | Three queries and one table did not justify sqlc and goose; revisit when a second migration is needed. |
 | Config | `github.com/pelletier/go-toml/v2` | Fast, strict, good error messages. |
 | Logging | `log/slog` (stdlib) | JSON handler, structured, zero dependencies. |
 | Process groups | `os/exec` + `syscall` (stdlib) | `SysProcAttr{Setpgid: true}` and killing the negative PID. |
@@ -142,7 +141,7 @@ A namespace is a name, a list of servers, and an endpoint path.
 
 ---
 
-## 8. Audit log (not yet implemented)
+## 8. Audit log
 
 ```sql
 CREATE TABLE tool_calls (
@@ -191,7 +190,7 @@ See `gateway.example.toml`. `${VAR}` interpolates from the host environment at l
 | M0 | Spawn one upstream, proxy `tools/list` + `tools/call` over stdio | done |
 | M1 | Supervisor: process groups, restart/backoff, health, clean shutdown, process-count invariant test | done |
 | M2 | Namespaces, config file, streamable HTTP endpoint, tool prefixing | done |
-| M3 | Audit log: schema, redaction, buffered writer, read API, retention | next |
+| M3 | Audit log: schema, redaction, buffered writer, read API, retention | done |
 | M4 | Auth: protected-resource metadata, JWKS validation, static-token fallback | done |
 | M5 | Ops: per-child RSS metrics, Dockerfile, memory limit | pending |
 
