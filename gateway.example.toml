@@ -1,0 +1,37 @@
+[server]
+listen     = ":8080"
+public_url = "https://gw.example"
+
+[auth]
+# OIDC issuer (Authelia, Keycloak, ...). Tokens must be JWTs with aud = audience.
+issuer           = "https://auth.example"
+audience         = "https://gw.example"
+required_scope   = "mcp:use"
+# optional: env var holding a static bearer token for scripts and bootstrapping
+static_token_env = "GATEWAY_STATIC_TOKEN"
+
+[audit]
+path           = "/data/audit.db"
+retention_days = 90
+max_payload_kb = 8
+
+[[namespace]]
+name    = "personal"
+servers = ["tradingview", "hevy"]
+
+[[namespace]]
+name    = "ops"
+servers = ["dokploy"]
+
+[servers.tradingview]
+command = "/usr/local/bin/uvx"
+args    = ["--from", "tradingview-mcp-server", "tradingview-mcp"]
+env     = { UV_CACHE_DIR = "/var/cache/uv", MARKETAUX_API_TOKEN = "${MARKETAUX_API_TOKEN}" }
+
+[servers.hevy]
+command = "/usr/local/bin/hevy-mcp"
+env     = { HEVY_API_KEY = "${HEVY_API_KEY}" }
+
+[servers.dokploy]
+command = "/usr/local/bin/dokploy-mcp"
+env     = { DOKPLOY_URL = "${DOKPLOY_URL}", DOKPLOY_API_KEY = "${DOKPLOY_API_KEY}" }

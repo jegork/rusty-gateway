@@ -1,0 +1,6 @@
+/bin/
+/dist/
+*.db
+*.db-*
+/data/
+.env
