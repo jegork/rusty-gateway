@@ -80,7 +80,7 @@ func New(publicURL string, store *Store, upstreams []Upstream, log *slog.Logger)
 			close(e.ready)
 			log.Info("upstream oauth credentials loaded", "upstream", up.ID)
 		case errors.Is(err, errNotFound):
-			log.Warn("upstream needs login", "upstream", up.ID, "login", "GET "+publicURL+LoginPath(up.ID))
+			log.Info("no stored oauth credentials, login url follows once the server is up", "upstream", up.ID)
 		default:
 			return nil, fmt.Errorf("load credentials for %s: %w", up.ID, err)
 		}
