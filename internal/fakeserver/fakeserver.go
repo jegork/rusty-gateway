@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -24,6 +25,7 @@ const EnvFlag = "RG_FAKE_SERVER"
 //	RG_CRASH_AFTER_MS=n    exit 4 after n milliseconds
 //	RG_CRASH_ONCE=path     with RG_CRASH_AFTER_MS, only crash if path does not exist, creating it
 //	RG_TOOLS=a,b           extra no-op tool names beyond "echo"
+//	RG_NO_PING=1           answer ping with JSON-RPC method not found
 func Main() {
 	if os.Getenv("RG_FAIL_START") != "" {
 		os.Exit(3)
@@ -40,6 +42,16 @@ func Main() {
 		go func() { time.Sleep(time.Duration(d) * time.Millisecond); os.Exit(4) }()
 	}
 	srv := mcp.NewServer(&mcp.Implementation{Name: "fake", Version: "0"}, nil)
+	if os.Getenv("RG_NO_PING") != "" {
+		srv.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+				if method == "ping" {
+					return nil, &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: "Method not found"}
+				}
+				return next(ctx, method, req)
+			}
+		})
+	}
 	echo := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(req.Params.Arguments)}}}, nil
 	}

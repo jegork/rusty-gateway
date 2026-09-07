@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/shirou/gopsutil/v4/process"
 )
@@ -376,7 +377,7 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 			pctx, cancel := context.WithTimeout(ctx, opts.PingInterval)
 			err := sess.Ping(pctx, nil)
 			cancel()
-			if err != nil && ctx.Err() == nil {
+			if err != nil && ctx.Err() == nil && !isMethodNotFound(err) {
 				u.shutdown(sess, pid)
 				return fmt.Errorf("ping: %w", err)
 			}
@@ -436,6 +437,13 @@ func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		r.Header.Set(k, v)
 	}
 	return http.DefaultTransport.RoundTrip(r)
+}
+
+// some servers never implement ping; a method-not-found reply still proves
+// the process is alive and answering
+func isMethodNotFound(err error) bool {
+	var je *jsonrpc.Error
+	return errors.As(err, &je) && je.Code == jsonrpc.CodeMethodNotFound
 }
 
 func killGroup(pid int) {

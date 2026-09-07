@@ -164,3 +164,15 @@ func TestComposeEnvIsExplicit(t *testing.T) {
 		t.Errorf("%v", red)
 	}
 }
+
+func TestServerWithoutPingStaysReady(t *testing.T) {
+	s := New([]Spec{fakeSpec(t, "ns/noping", map[string]string{"RG_NO_PING": "1"})}, fastOpts())
+	s.Start(context.Background())
+	defer s.Stop()
+	pid := s.LivePIDs()[0]
+	time.Sleep(700 * time.Millisecond) // several ping intervals
+	st := s.Statuses()[0]
+	if st.State != "ready" || st.Restarts != 0 || st.PID != pid {
+		t.Errorf("upstream without ping support was restarted: %+v", st)
+	}
+}
