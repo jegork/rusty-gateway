@@ -47,7 +47,9 @@ func Main() {
 	// slow sleeps for {"ms": n} before answering, honoring cancellation
 	srv.AddTool(&mcp.Tool{Name: "slow", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			var in struct{ MS int `json:"ms"` }
+			var in struct {
+				MS int `json:"ms"`
+			}
 			json.Unmarshal(req.Params.Arguments, &in)
 			select {
 			case <-time.After(time.Duration(in.MS) * time.Millisecond):
