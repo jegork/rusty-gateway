@@ -74,10 +74,15 @@ Config reload on SIGHUP is not implemented; restart the process.
 
 ## Deploy
 
+Each release publishes tarballs for linux/darwin on amd64/arm64 and a
+multi-arch image at `ghcr.io/jegork/rusty-gateway:<tag>` (also `latest`).
+The image is private like the repo, so pulling from Dokploy needs a GitHub
+token with `read:packages`.
+
 ```yaml
 services:
   gateway:
-    build: .
+    image: ghcr.io/jegork/rusty-gateway:latest
     ports: ["8080:8080"]
     volumes:
       - ./gateway.toml:/etc/gateway/gateway.toml:ro
