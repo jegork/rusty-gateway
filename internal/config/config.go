@@ -119,6 +119,11 @@ func Parse(raw []byte, lookup func(string) (string, bool)) (*Config, error) {
 		if errors.As(err, &strict) {
 			return nil, fmt.Errorf("parse config: unknown fields:\n%s", strict.String())
 		}
+		var de *toml.DecodeError
+		if errors.As(err, &de) {
+			row, col := de.Position()
+			return nil, fmt.Errorf("parse config: line %d column %d: %s\n%s", row, col, de.Error(), de.String())
+		}
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	c.applyDefaults()

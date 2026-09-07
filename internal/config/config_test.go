@@ -87,6 +87,14 @@ func TestParseErrors(t *testing.T) {
 	}
 }
 
+func TestSyntaxErrorReportsLine(t *testing.T) {
+	src := "[server]\npublic_url = \"x\"\n[servers.a]\nargs = [\"--from\" \"pkg\"]\n"
+	_, err := Parse([]byte(src), lookup(nil))
+	if err == nil || !strings.Contains(err.Error(), "line 4") || !strings.Contains(err.Error(), "args = ") {
+		t.Fatalf("want line number and context, got: %v", err)
+	}
+}
+
 func TestNonExecutableCommandRejected(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "srv")
 	os.WriteFile(p, []byte(""), 0o644)
