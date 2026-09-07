@@ -82,16 +82,15 @@ func New(sup *supervisor.Supervisor, namespaces []Namespace, opts Options) *Gate
 		breakers: map[string]*breaker{},
 	}
 	for _, ns := range namespaces {
+		nsLog := opts.Logger.With("namespace", ns.Name)
 		g.servers[ns.Name] = &nsServer{
 			ns: ns,
 			server: mcp.NewServer(&mcp.Implementation{Name: "rusty-gateway/" + ns.Name, Version: opts.Version},
-				&mcp.ServerOptions{
-					Logger:             opts.Logger.With("namespace", ns.Name),
-					InitializedHandler: sessionLogger(opts.Logger, ns.Name),
-				}),
+				&mcp.ServerOptions{Logger: opts.Logger.With("namespace", ns.Name)}),
 			sem:        newSemaphore(opts.Limits.namespaceLimit(ns.Name)),
 			registered: map[string]string{},
 		}
+		g.servers[ns.Name].server.AddReceivingMiddleware(requestLogger(nsLog))
 		for _, srv := range ns.Servers {
 			id := UpstreamID(ns.Name, srv)
 			g.perSrv[id] = newSemaphore(opts.Limits.serverLimit(id))
@@ -110,14 +109,26 @@ func (g *Gateway) Breakers() map[string]string {
 	return out
 }
 
-// sessionLogger records each client session once it completes initialization.
-func sessionLogger(log *slog.Logger, namespace string) func(context.Context, *mcp.InitializedRequest) {
-	return func(ctx context.Context, req *mcp.InitializedRequest) {
-		attrs := []any{"namespace", namespace, "session", req.Session.ID(), "client_id", auth.ClientID(ctx)}
-		if ci := req.ClientInfo(); ci != nil {
-			attrs = append(attrs, "client", ci.Name, "client_version", ci.Version)
+// requestLogger records session lifecycle at info and every other method at
+// debug, so a client that never sends notifications/initialized still shows up.
+func requestLogger(log *slog.Logger) mcp.Middleware {
+	return func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			res, err := next(ctx, method, req)
+			attrs := []any{"method", method, "session", req.GetSession().ID(), "client_id", auth.ClientID(ctx)}
+			if err != nil {
+				attrs = append(attrs, "err", err)
+			}
+			if method == "initialize" {
+				if p, ok := req.GetParams().(*mcp.InitializeParams); ok && p.ClientInfo != nil {
+					attrs = append(attrs, "client", p.ClientInfo.Name, "client_version", p.ClientInfo.Version, "protocol", p.ProtocolVersion)
+				}
+				log.Log(ctx, slog.LevelInfo, "session initialize", attrs...)
+				return res, err
+			}
+			log.Log(ctx, slog.LevelDebug, "mcp request", attrs...)
+			return res, err
 		}
-		log.Info("session initialized", attrs...)
 	}
 }
 
