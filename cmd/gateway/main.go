@@ -113,11 +113,12 @@ func run(cfgPath string, log *slog.Logger) error {
 	var ua *upstreamauth.Manager
 	if len(oauthUpstreams) > 0 {
 		if err := os.MkdirAll(cfg.Server.DataDir, 0o750); err != nil {
-			return err
+			return fmt.Errorf("create data_dir %s: %w", cfg.Server.DataDir, err)
 		}
-		st, err := upstreamauth.OpenStore(filepath.Join(cfg.Server.DataDir, "state.db"))
+		statePath := filepath.Join(cfg.Server.DataDir, "state.db")
+		st, err := upstreamauth.OpenStore(statePath)
 		if err != nil {
-			return fmt.Errorf("open state db: %w", err)
+			return fmt.Errorf("open state db %s (is server.data_dir writable?): %w", statePath, err)
 		}
 		defer st.Close()
 		ua, err = upstreamauth.New(cfg.Server.PublicURL, st, oauthUpstreams, log)

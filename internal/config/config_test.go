@@ -99,6 +99,18 @@ func TestBareCommandResolvedThroughPath(t *testing.T) {
 	}
 }
 
+func TestDataDirDefaultsNextToAudit(t *testing.T) {
+	cmd := writeExec(t)
+	c, _ := Parse([]byte(minimal(cmd)+"\n[audit]\npath = \"/data/audit.db\"\n"), lookup(map[string]string{"TOK": "t", "SECRET": "s"}))
+	if c.Server.DataDir != "/data" {
+		t.Errorf("data_dir = %q", c.Server.DataDir)
+	}
+	c, _ = Parse([]byte(minimal(cmd)), lookup(map[string]string{"TOK": "t", "SECRET": "s"}))
+	if c.Server.DataDir != "." {
+		t.Errorf("data_dir without audit = %q", c.Server.DataDir)
+	}
+}
+
 func TestSyntaxErrorReportsLine(t *testing.T) {
 	src := "[server]\npublic_url = \"x\"\n[servers.a]\nargs = [\"--from\" \"pkg\"]\n"
 	_, err := Parse([]byte(src), lookup(nil))

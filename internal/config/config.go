@@ -153,8 +153,13 @@ func (c *Config) applyDefaults() {
 	if c.Server.Listen == "" {
 		c.Server.Listen = ":8080"
 	}
+	// state lives next to the audit db unless told otherwise
 	if c.Server.DataDir == "" {
-		c.Server.DataDir = "."
+		if c.Audit.Path != "" {
+			c.Server.DataDir = filepath.Dir(c.Audit.Path)
+		} else {
+			c.Server.DataDir = "."
+		}
 	}
 	if c.Audit.RetentionDays == 0 {
 		c.Audit.RetentionDays = 90

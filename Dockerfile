@@ -28,6 +28,7 @@ RUN useradd --create-home --uid 1000 gateway \
     && chown -R gateway:gateway /data /var/cache/uv /var/cache/npm
 COPY --from=build /gateway /usr/local/bin/gateway
 USER gateway
+WORKDIR /data
 ENV HOME=/home/gateway UV_CACHE_DIR=/var/cache/uv npm_config_cache=/var/cache/npm
 VOLUME ["/data", "/var/cache/uv", "/var/cache/npm"]
 EXPOSE 8080
