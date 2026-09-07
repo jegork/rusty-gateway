@@ -207,10 +207,17 @@ func TestLoginThenConnectThenRestartWithoutLogin(t *testing.T) {
 	path := t.TempDir() + "/state.db"
 	h := newHarness(t, as, path)
 
-	// supervisor start blocks until first state; needs_login counts, so run it async
-	started := make(chan struct{})
-	go func() { h.sup.Start(context.Background()); close(started) }()
-	waitFor(t, "needs_login", func() bool { return h.state() == "needs_login" })
+	// Start must return with the upstream parked in needs_login, not block on a human
+	done := make(chan struct{})
+	go func() { h.sup.Start(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("supervisor Start blocked on an upstream that needs login")
+	}
+	if h.state() != "needs_login" {
+		t.Fatalf("state after start: %s", h.state())
+	}
 	if _, err := h.mgr.Handler("p/notion"); err != ErrLoginRequired {
 		t.Fatalf("handler before login: %v", err)
 	}
@@ -226,7 +233,6 @@ func TestLoginThenConnectThenRestartWithoutLogin(t *testing.T) {
 		t.Error("second concurrent login should be refused")
 	}
 	browse(t, authURL)
-	<-started
 	waitFor(t, "ready", func() bool { return h.state() == "ready" })
 	u, _ := h.sup.Get("p/notion")
 	res, err := u.CallTool(context.Background(), &mcp.CallToolParams{Name: "search"})
@@ -255,8 +261,7 @@ func TestRefreshPersistsAndRevocationNeedsLogin(t *testing.T) {
 	as.tokenTTL = 2 * time.Second // oauth2 refreshes when within 10s of expiry, so every call refreshes
 	path := t.TempDir() + "/state.db"
 	h := newHarness(t, as, path)
-	go h.sup.Start(context.Background())
-	waitFor(t, "needs_login", func() bool { return h.state() == "needs_login" })
+	h.sup.Start(context.Background())
 	authURL, err := h.mgr.StartLogin(context.Background(), "p/notion")
 	if err != nil {
 		t.Fatal(err)
@@ -310,9 +315,8 @@ func TestAutoLoginLogsURLAndCompletes(t *testing.T) {
 	var sb strings.Builder
 	var mu sync.Mutex
 	h.mgr.log = slog.New(slog.NewTextHandler(lockedWriter{&sb, &mu}, nil))
-	go h.sup.Start(context.Background())
+	h.sup.Start(context.Background())
 	defer h.sup.Stop()
-	waitFor(t, "needs_login", func() bool { return h.state() == "needs_login" })
 
 	h.mgr.AutoLogin(context.Background())
 	var authURL string

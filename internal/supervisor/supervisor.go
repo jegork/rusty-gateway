@@ -341,7 +341,7 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 			HTTPClient: &http.Client{Transport: headerTransport{headers: u.spec.Headers}},
 		}
 		if u.spec.OAuth {
-			h, err := u.awaitOAuth(ctx, log)
+			h, err := u.awaitOAuth(ctx, log, onReady)
 			if err != nil {
 				return err
 			}
@@ -422,7 +422,7 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 
 // awaitOAuth parks the upstream in NeedsLogin until the provider has
 // credentials; waiting is not a failure and burns no restart budget.
-func (u *Upstream) awaitOAuth(ctx context.Context, log *slog.Logger) (auth.OAuthHandler, error) {
+func (u *Upstream) awaitOAuth(ctx context.Context, log *slog.Logger, parked func()) (auth.OAuthHandler, error) {
 	p := u.sup.opts.OAuth
 	if p == nil {
 		return nil, errors.New("oauth upstream configured without a provider")
@@ -436,6 +436,8 @@ func (u *Upstream) awaitOAuth(ctx context.Context, log *slog.Logger) (auth.OAuth
 			return nil, err
 		}
 		u.setState(NeedsLogin, err)
+		// boot must not block on a human; needs_login is a settled first state
+		parked()
 		log.Warn("upstream waiting for login")
 		if err := p.Wait(ctx, u.spec.ID); err != nil {
 			return nil, err
