@@ -254,9 +254,16 @@ func (c *Config) validate() error {
 			errs = append(errs, fmt.Errorf("server %q: command or url is required", name))
 			continue
 		}
+		// bare names are resolved through PATH once here and pinned, so a
+		// later PATH change cannot silently swap the binary
 		if !filepath.IsAbs(srv.Command) {
-			errs = append(errs, fmt.Errorf("server %q: command must be an absolute path, got %q", name, srv.Command))
-			continue
+			resolved, err := exec.LookPath(srv.Command)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("server %q: command %q not found in PATH", name, srv.Command))
+				continue
+			}
+			srv.Command = resolved
+			c.Servers[name] = srv
 		}
 		if err := checkExecutable(srv.Command); err != nil {
 			errs = append(errs, fmt.Errorf("server %q: %w", name, err))

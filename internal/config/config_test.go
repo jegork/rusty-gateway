@@ -64,7 +64,7 @@ func TestParseErrors(t *testing.T) {
 	}{
 		{"missing env var", minimal(cmd), map[string]string{"TOK": "t"}, "unset environment variables: SECRET"},
 		{"empty static token", minimal(cmd), map[string]string{"SECRET": "s"}, "TOK is unset"},
-		{"relative command", minimal("uvx"), ok, "absolute path"},
+		{"command not in PATH", minimal("definitely-not-a-binary-xyz"), ok, "not found in PATH"},
 		{"missing binary", minimal(filepath.Join(t.TempDir(), "nope")), ok, "no such file"},
 		{"unknown server", strings.Replace(minimal(cmd), `servers = ["a"]`, `servers = ["a", "b"]`, 1), ok, `unknown server "b"`},
 		{"unknown field", minimal(cmd) + "\n[bogus]\nx = 1\n", ok, "bogus"},
@@ -84,6 +84,18 @@ func TestParseErrors(t *testing.T) {
 				t.Fatalf("want error containing %q, got %v", tc.wantIn, err)
 			}
 		})
+	}
+}
+
+func TestBareCommandResolvedThroughPath(t *testing.T) {
+	dir := filepath.Dir(writeExec(t))
+	t.Setenv("PATH", dir)
+	c, err := Parse([]byte(minimal("srv")), lookup(map[string]string{"TOK": "t", "SECRET": "s"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Servers["a"].Command; got != filepath.Join(dir, "srv") {
+		t.Errorf("command not pinned to absolute path: %q", got)
 	}
 }
 

@@ -15,8 +15,9 @@ go build ./cmd/gateway
 GATEWAY_STATIC_TOKEN=... ./gateway -config gateway.toml
 ```
 
-See `gateway.example.toml`. Every `command` must be an absolute path to an
-executable; the gateway refuses to start otherwise. `${VAR}` in `env` values is
+See `gateway.example.toml`. A bare `command` like `uvx` is resolved through
+`PATH` once at load and pinned to its absolute path; a missing or
+non-executable binary fails startup. `${VAR}` in `env` values is
 expanded from the host environment at load and missing variables are an error.
 
 Endpoints:
