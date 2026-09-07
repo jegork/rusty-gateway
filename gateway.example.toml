@@ -29,8 +29,11 @@ failures = 5      # consecutive transport errors/timeouts before opening; 0 disa
 cooldown = "30s"  # then one trial call is let through
 
 [[namespace]]
-name    = "personal"
-servers = ["tradingview", "hevy"]
+name      = "personal"
+servers   = ["tradingview", "hevy"]
+discovery = "search"     # full (default): every server__tool
+                         # connector: {server}__list_tools + {server}__call per server
+                         # search: search_tools + call_tool for the namespace
 
 [[namespace]]
 name           = "ops"

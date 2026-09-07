@@ -86,7 +86,7 @@ func run(cfgPath string, log *slog.Logger) error {
 		NamespaceConcurrency: map[string]int{}, ServerConcurrency: map[string]int{}, ServerTimeout: map[string]time.Duration{},
 	}
 	for _, ns := range cfg.Namespaces {
-		namespaces = append(namespaces, gateway.Namespace{Name: ns.Name, Servers: ns.Servers})
+		namespaces = append(namespaces, gateway.Namespace{Name: ns.Name, Servers: ns.Servers, Discovery: gateway.Discovery(ns.Discovery)})
 		limits.NamespaceConcurrency[ns.Name] = ns.MaxConcurrent
 		for _, name := range ns.Servers {
 			srv := cfg.Servers[name]

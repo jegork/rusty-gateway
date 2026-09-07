@@ -42,6 +42,23 @@ Rows older than `audit.retention_days` are pruned daily.
 ./gateway audit tail -config gateway.toml -n 50 -f
 ```
 
+## Tool discovery modes
+
+Each namespace picks how clients see its tools with `discovery`:
+
+- `full` (default): every tool as `server__tool`. Simple, but a namespace
+  with 100 tools costs the client 100 schemas of context on every session.
+- `connector`: two meta-tools per server, `{server}__list_tools` and
+  `{server}__call`. The client loads a server's real tools only when it
+  needs that server.
+- `search`: two meta-tools for the whole namespace, `search_tools(query)`
+  and `call_tool(name, arguments)`. Search matches keywords against tool
+  names, titles, descriptions and parameter names and returns schemas.
+
+Meta-tool calls go through the same dispatcher, so limits, timeouts, the
+breaker and the audit log apply, and audit rows record the resolved server
+and tool rather than the meta-tool.
+
 ## Logging
 
 The gateway logs JSON to stderr. Each upstream's stderr is captured line by

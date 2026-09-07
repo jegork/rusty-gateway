@@ -22,8 +22,9 @@ import (
 const Separator = "__"
 
 type Namespace struct {
-	Name    string
-	Servers []string
+	Name      string
+	Servers   []string
+	Discovery Discovery // empty means DiscoveryFull
 }
 
 type Options struct {
@@ -91,6 +92,7 @@ func New(sup *supervisor.Supervisor, namespaces []Namespace, opts Options) *Gate
 			registered: map[string]string{},
 		}
 		g.servers[ns.Name].server.AddReceivingMiddleware(requestLogger(nsLog))
+		g.registerMetaTools(g.servers[ns.Name])
 		for _, srv := range ns.Servers {
 			id := UpstreamID(ns.Name, srv)
 			g.perSrv[id] = newSemaphore(opts.Limits.serverLimit(id))
@@ -159,6 +161,10 @@ func (g *Gateway) RefreshAll() {
 }
 
 func (g *Gateway) syncLocked(ns *nsServer) {
+	// meta-tool modes read the upstream tool cache live; nothing to register
+	if ns.ns.Discovery != "" && ns.ns.Discovery != DiscoveryFull {
+		return
+	}
 	want := map[string]string{}
 	added := 0
 	for _, srvName := range ns.ns.Servers {
@@ -171,14 +177,7 @@ func (g *Gateway) syncLocked(ns *nsServer) {
 			pt := *t
 			pt.Name = name
 			// clients display the title, so the provenance has to be there too
-			title := t.Title
-			if title == "" && t.Annotations != nil {
-				title = t.Annotations.Title
-			}
-			if title == "" {
-				title = t.Name
-			}
-			pt.Title = srvName + ": " + title
+			pt.Title = srvName + ": " + displayTitle(t)
 			enc, _ := json.Marshal(&pt)
 			want[name] = string(enc)
 			if ns.registered[name] == want[name] {
