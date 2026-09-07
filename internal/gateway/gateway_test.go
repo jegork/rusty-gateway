@@ -59,7 +59,9 @@ func setup(t *testing.T, namespaces []Namespace, specs []supervisor.Spec, opts .
 	f.sup.Start(context.Background())
 	gw.RefreshAll()
 	mux := http.NewServeMux()
-	mux.Handle("/mcp/{ns}", gw.Handler())
+	for _, ns := range namespaces {
+		mux.Handle("/mcp/"+ns.Name, gw.Handler(ns.Name))
+	}
 	f.http = httptest.NewServer(mux)
 	t.Cleanup(func() { f.http.Close(); f.sup.Stop() })
 	return f
@@ -169,6 +171,11 @@ func TestUnknownNamespaceIs404AndFailedUpstreamHidesTools(t *testing.T) {
 	res, err := http.Post(f.http.URL+"/mcp/nope", "application/json", strings.NewReader("{}"))
 	if err != nil || res.StatusCode != 404 {
 		t.Fatalf("unknown ns: %v %v", err, res.StatusCode)
+	}
+	// a real session must initialize end to end over http, guarding against
+	// route/handler mismatches like a namespace read from the wrong place
+	if s := f.connect(t, "p"); s == nil {
+		t.Fatal("connect")
 	}
 	waitFor(t, "broken to fail", func() bool { return f.sup.Statuses()[1].State == "failed" })
 	s := f.connect(t, "p")

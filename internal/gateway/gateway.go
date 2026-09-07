@@ -15,6 +15,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/jegork/rusty-gateway/internal/auth"
 	"github.com/jegork/rusty-gateway/internal/supervisor"
 )
 
@@ -84,7 +85,10 @@ func New(sup *supervisor.Supervisor, namespaces []Namespace, opts Options) *Gate
 		g.servers[ns.Name] = &nsServer{
 			ns: ns,
 			server: mcp.NewServer(&mcp.Implementation{Name: "rusty-gateway/" + ns.Name, Version: opts.Version},
-				&mcp.ServerOptions{Logger: opts.Logger.With("namespace", ns.Name)}),
+				&mcp.ServerOptions{
+					Logger:             opts.Logger.With("namespace", ns.Name),
+					InitializedHandler: sessionLogger(opts.Logger, ns.Name),
+				}),
 			sem:        newSemaphore(opts.Limits.namespaceLimit(ns.Name)),
 			registered: map[string]string{},
 		}
@@ -104,6 +108,17 @@ func (g *Gateway) Breakers() map[string]string {
 		out[id] = b.state()
 	}
 	return out
+}
+
+// sessionLogger records each client session once it completes initialization.
+func sessionLogger(log *slog.Logger, namespace string) func(context.Context, *mcp.InitializedRequest) {
+	return func(ctx context.Context, req *mcp.InitializedRequest) {
+		attrs := []any{"namespace", namespace, "session", req.Session.ID(), "client_id", auth.ClientID(ctx)}
+		if ci := req.ClientInfo(); ci != nil {
+			attrs = append(attrs, "client", ci.Name, "client_version", ci.Version)
+		}
+		log.Info("session initialized", attrs...)
+	}
 }
 
 // UpstreamID is the supervisor key for a server within a namespace.
@@ -230,28 +245,18 @@ func (g *Gateway) dispatch(ctx context.Context, ns *nsServer, srvSem semaphore, 
 	return res, err
 }
 
-// Handler serves POST/GET/DELETE /mcp/{ns} with streamable HTTP.
-func (g *Gateway) Handler() http.Handler {
-	streamable := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
-		g.mu.Lock()
-		defer g.mu.Unlock()
-		if ns, ok := g.servers[r.PathValue("ns")]; ok {
-			return ns.server
-		}
-		return nil
-	}, &mcp.StreamableHTTPOptions{Logger: g.log, SessionTimeout: 30 * time.Minute})
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		name := r.PathValue("ns")
-		g.mu.Lock()
-		_, ok := g.servers[name]
-		g.mu.Unlock()
-		if !ok {
+// Handler serves streamable HTTP for one namespace. Mount it at /mcp/{name}.
+func (g *Gateway) Handler(name string) http.Handler {
+	g.mu.Lock()
+	ns, ok := g.servers[name]
+	g.mu.Unlock()
+	if !ok {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown namespace: "+name, http.StatusNotFound)
-			return
-		}
-		streamable.ServeHTTP(w, r)
-	})
+		})
+	}
+	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return ns.server },
+		&mcp.StreamableHTTPOptions{Logger: g.log, SessionTimeout: 30 * time.Minute})
 }
 
 // Namespaces lists configured namespace names in stable order.

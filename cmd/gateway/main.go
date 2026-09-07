@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -107,11 +106,11 @@ func run(cfgPath string, log *slog.Logger) error {
 		Breaker: gateway.BreakerConfig{Failures: cfg.Breaker.Failures, Cooldown: cfg.Breaker.Cooldown.Duration},
 	})
 
-	mux := http.NewServeMux()
+	var store *audit.Store
 	if cfg.Audit.Path == "" {
 		log.Warn("audit.path not set, tool calls are not being recorded")
 	} else {
-		store, err := audit.Open(cfg.Audit.Path)
+		store, err = audit.Open(cfg.Audit.Path)
 		if err != nil {
 			return fmt.Errorf("open audit db: %w", err)
 		}
@@ -120,33 +119,13 @@ func run(cfgPath string, log *slog.Logger) error {
 		defer sink.Close()
 		gw.Observe = sink.Observe
 		go audit.Retention(ctx, store, time.Duration(cfg.Audit.RetentionDays)*24*time.Hour, log)
-		mux.Handle("GET /audit", authn.Middleware("")(audit.Handler(store)))
 	}
 
 	sup.Start(ctx)
 	gw.RefreshAll()
 	defer sup.Stop()
 
-	mcpHandler := gw.Handler()
-	for _, r := range resources {
-		mux.Handle(r, authn.Middleware(r)(mcpHandler))
-	}
-	mux.Handle(auth.MetadataPath, authn.MetadataHandler())
-	mux.Handle(auth.MetadataPath+"/", authn.MetadataHandler())
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		statuses := sup.Statuses()
-		code := http.StatusOK
-		for _, s := range statuses {
-			if s.State == "failed" {
-				code = http.StatusServiceUnavailable
-			}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(code)
-		json.NewEncoder(w).Encode(map[string]any{
-			"version": version, "namespaces": gw.Namespaces(), "upstreams": statuses, "breakers": gw.Breakers(),
-		})
-	})
+	mux := newMux(cfg, authn, gw, sup, store)
 
 	srv := &http.Server{Addr: cfg.Server.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)

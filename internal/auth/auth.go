@@ -115,15 +115,16 @@ func (a *Authenticator) verify(ctx context.Context, token string, r *http.Reques
 		}, nil
 	}
 	if a.verifier == nil {
+		a.cfg.Logger.WarnContext(ctx, "token rejected", "method", "static", "err", "no match and no issuer configured", "remote", r.RemoteAddr)
 		return nil, sdkauth.ErrInvalidToken
 	}
 	idt, err := a.verifier.Verify(ctx, token)
 	if err != nil {
-		a.cfg.Logger.DebugContext(ctx, "token rejected", "method", "oidc", "err", err)
+		a.cfg.Logger.WarnContext(ctx, "token rejected", "method", "oidc", "err", err, "remote", r.RemoteAddr)
 		return nil, fmt.Errorf("%w: %v", sdkauth.ErrInvalidToken, err)
 	}
 	if !slices.ContainsFunc(idt.Audience, func(aud string) bool { return slices.Contains(a.audience, aud) }) {
-		a.cfg.Logger.DebugContext(ctx, "token rejected", "method", "oidc", "err", "audience mismatch", "aud", idt.Audience, "accepted", a.audience)
+		a.cfg.Logger.WarnContext(ctx, "token rejected", "method", "oidc", "err", "audience mismatch", "aud", idt.Audience, "accepted", a.audience, "remote", r.RemoteAddr)
 		return nil, fmt.Errorf("%w: audience %v not accepted", sdkauth.ErrInvalidToken, idt.Audience)
 	}
 	var claims struct {
