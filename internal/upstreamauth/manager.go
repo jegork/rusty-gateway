@@ -225,6 +225,9 @@ func (m *Manager) autoLogin(ctx context.Context, e *entry) {
 		ready := e.ready
 		m.mu.Unlock()
 		u, err := m.StartLogin(ctx, e.up.ID)
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
 			m.log.Error("could not start upstream login; retry via the login endpoint", "upstream", e.up.ID, "err", err)
 			return
