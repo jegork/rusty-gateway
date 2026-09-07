@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/shirou/gopsutil/v4/process"
@@ -32,6 +33,7 @@ const (
 	Ready
 	Failed
 	Stopped
+	NeedsLogin
 )
 
 func (s State) String() string {
@@ -44,6 +46,8 @@ func (s State) String() string {
 		return "failed"
 	case Stopped:
 		return "stopped"
+	case NeedsLogin:
+		return "needs_login"
 	}
 	return "unknown"
 }
@@ -58,6 +62,9 @@ type Spec struct {
 	Env     map[string]string
 	URL     string
 	Headers map[string]string
+	// OAuth marks a remote upstream whose bearer tokens come from
+	// Options.OAuth rather than static headers.
+	OAuth bool
 	// StderrLevel is the slog level child stderr lines are logged at.
 	// nil means debug; StderrDiscard drops them.
 	StderrLevel *slog.Level
@@ -83,7 +90,19 @@ type Options struct {
 	BaseEnv []string
 	// OnChange is called whenever an upstream's state or tool list changes.
 	OnChange func(id string)
-	Logger   *slog.Logger
+	// OAuth supplies token handlers for Spec.OAuth upstreams.
+	OAuth  OAuthProvider
+	Logger *slog.Logger
+}
+
+// ErrLoginRequired is returned by OAuthProvider.Handler until the user has
+// completed the interactive authorization for an upstream.
+var ErrLoginRequired = errors.New("login required")
+
+type OAuthProvider interface {
+	Handler(id string) (auth.OAuthHandler, error)
+	// Wait blocks until credentials for id become available or ctx ends.
+	Wait(ctx context.Context, id string) error
 }
 
 func (o *Options) defaults() {
@@ -317,10 +336,18 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 	var cmd *exec.Cmd
 	if u.spec.Remote() {
 		log.Debug("connecting upstream", "url", u.spec.URL, "headers", slices.Sorted(maps.Keys(u.spec.Headers)))
-		transport = &mcp.StreamableClientTransport{
+		st := &mcp.StreamableClientTransport{
 			Endpoint:   u.spec.URL,
 			HTTPClient: &http.Client{Transport: headerTransport{headers: u.spec.Headers}},
 		}
+		if u.spec.OAuth {
+			h, err := u.awaitOAuth(ctx, log)
+			if err != nil {
+				return err
+			}
+			st.OAuthHandler = h
+		}
+		transport = st
 	} else {
 		cmd = exec.Command(u.spec.Command, u.spec.Args...)
 		cmd.Env = composeEnv(opts.BaseEnv, u.spec.Env)
@@ -390,6 +417,30 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 				return fmt.Errorf("ping: %w", err)
 			}
 		}
+	}
+}
+
+// awaitOAuth parks the upstream in NeedsLogin until the provider has
+// credentials; waiting is not a failure and burns no restart budget.
+func (u *Upstream) awaitOAuth(ctx context.Context, log *slog.Logger) (auth.OAuthHandler, error) {
+	p := u.sup.opts.OAuth
+	if p == nil {
+		return nil, errors.New("oauth upstream configured without a provider")
+	}
+	for {
+		h, err := p.Handler(u.spec.ID)
+		if err == nil {
+			return h, nil
+		}
+		if !errors.Is(err, ErrLoginRequired) {
+			return nil, err
+		}
+		u.setState(NeedsLogin, err)
+		log.Warn("upstream waiting for login")
+		if err := p.Wait(ctx, u.spec.ID); err != nil {
+			return nil, err
+		}
+		u.setState(Starting, nil)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"github.com/jegork/rusty-gateway/internal/config"
 	"github.com/jegork/rusty-gateway/internal/gateway"
 	"github.com/jegork/rusty-gateway/internal/supervisor"
+	"github.com/jegork/rusty-gateway/internal/upstreamauth"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
 
 // set by goreleaser / ldflags
@@ -76,6 +79,7 @@ func run(cfgPath string, log *slog.Logger) error {
 
 	var specs []supervisor.Spec
 	var namespaces []gateway.Namespace
+	var oauthUpstreams []upstreamauth.Upstream
 	limits := gateway.Limits{
 		CallTimeout: cfg.Limits.CallTimeout.Duration, MaxConcurrent: cfg.Limits.MaxConcurrent,
 		PerNamespace: cfg.Limits.PerNamespace, PerServer: cfg.Limits.PerServer,
@@ -89,18 +93,48 @@ func run(cfgPath string, log *slog.Logger) error {
 			id := gateway.UpstreamID(ns.Name, name)
 			specs = append(specs, supervisor.Spec{
 				ID: id, Command: srv.Command, Args: srv.Args, Env: srv.Env, URL: srv.URL, Headers: srv.Headers,
-				StderrLevel: stderrLevel(srv.StderrLevel),
+				OAuth: srv.OAuth, StderrLevel: stderrLevel(srv.StderrLevel),
 			})
+			if srv.OAuth {
+				up := upstreamauth.Upstream{ID: id, URL: srv.URL}
+				if srv.OAuthClientID != "" {
+					up.Preregistered = &oauthex.ClientCredentials{ClientID: srv.OAuthClientID}
+					if srv.OAuthClientSecret != "" {
+						up.Preregistered.ClientSecretAuth = &oauthex.ClientSecretAuth{ClientSecret: srv.OAuthClientSecret}
+					}
+				}
+				oauthUpstreams = append(oauthUpstreams, up)
+			}
 			limits.ServerConcurrency[id] = srv.MaxConcurrent
 			limits.ServerTimeout[id] = srv.CallTimeout.Duration
 		}
 	}
 
+	var ua *upstreamauth.Manager
+	if len(oauthUpstreams) > 0 {
+		if err := os.MkdirAll(cfg.Server.DataDir, 0o750); err != nil {
+			return err
+		}
+		st, err := upstreamauth.OpenStore(filepath.Join(cfg.Server.DataDir, "state.db"))
+		if err != nil {
+			return fmt.Errorf("open state db: %w", err)
+		}
+		defer st.Close()
+		ua, err = upstreamauth.New(cfg.Server.PublicURL, st, oauthUpstreams, log)
+		if err != nil {
+			return err
+		}
+	}
+
 	var gw *gateway.Gateway
-	sup := supervisor.New(specs, supervisor.Options{
+	supOpts := supervisor.Options{
 		Logger:   log,
 		OnChange: func(id string) { gw.Refresh(id) },
-	})
+	}
+	if ua != nil {
+		supOpts.OAuth = ua
+	}
+	sup := supervisor.New(specs, supOpts)
 	gw = gateway.New(sup, namespaces, gateway.Options{
 		Version: version, Logger: log, Limits: limits,
 		Breaker: gateway.BreakerConfig{Failures: cfg.Breaker.Failures, Cooldown: cfg.Breaker.Cooldown.Duration},
@@ -125,7 +159,7 @@ func run(cfgPath string, log *slog.Logger) error {
 	gw.RefreshAll()
 	defer sup.Stop()
 
-	mux := newMux(cfg, authn, gw, sup, store)
+	mux := newMux(cfg, authn, gw, sup, store, ua)
 
 	srv := &http.Server{Addr: cfg.Server.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)

@@ -65,7 +65,7 @@ args = ["` + strings.Join(args, `", "`) + `"]
 	defer sup.Stop()
 	gw.RefreshAll()
 
-	srv := httptest.NewServer(newMux(cfg, authn, gw, sup, nil))
+	srv := httptest.NewServer(newMux(cfg, authn, gw, sup, nil, nil))
 	defer srv.Close()
 
 	get := func(path, token string) (int, string) {

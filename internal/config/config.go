@@ -56,6 +56,8 @@ func (d *Duration) UnmarshalText(b []byte) error {
 type Server struct {
 	Listen    string `toml:"listen"`
 	PublicURL string `toml:"public_url"`
+	// DataDir holds gateway state such as upstream OAuth credentials.
+	DataDir string `toml:"data_dir"`
 }
 
 type Auth struct {
@@ -89,6 +91,12 @@ type Server_ struct {
 	Env     map[string]string `toml:"env"`
 	URL     string            `toml:"url"`
 	Headers map[string]string `toml:"headers"`
+	// OAuth makes the gateway obtain bearer tokens for this url server
+	// through an interactive login; optional pre-registered client.
+	OAuth                bool   `toml:"oauth"`
+	OAuthClientID        string `toml:"oauth_client_id"`
+	OAuthClientSecretEnv string `toml:"oauth_client_secret_env"`
+	OAuthClientSecret    string `toml:"-"`
 
 	MaxConcurrent int      `toml:"max_concurrent"` // overrides limits.max_concurrent_per_server
 	CallTimeout   Duration `toml:"call_timeout"`   // overrides limits.call_timeout
@@ -145,6 +153,9 @@ func (c *Config) applyDefaults() {
 	if c.Server.Listen == "" {
 		c.Server.Listen = ":8080"
 	}
+	if c.Server.DataDir == "" {
+		c.Server.DataDir = "."
+	}
 	if c.Audit.RetentionDays == 0 {
 		c.Audit.RetentionDays = 90
 	}
@@ -177,6 +188,13 @@ func (c *Config) expand(lookup func(string) (string, bool)) error {
 		}
 		for k, v := range srv.Headers {
 			srv.Headers[k] = expandOne(v)
+		}
+		if srv.OAuthClientSecretEnv != "" {
+			if v, ok := lookup(srv.OAuthClientSecretEnv); ok {
+				srv.OAuthClientSecret = v
+			} else {
+				missing = append(missing, srv.OAuthClientSecretEnv)
+			}
 		}
 		c.Servers[name] = srv
 	}
@@ -250,7 +268,16 @@ func (c *Config) validate() error {
 			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 				errs = append(errs, fmt.Errorf("server %q: url must be an absolute http(s) url, got %q", name, srv.URL))
 			}
+			if !srv.OAuth && (srv.OAuthClientID != "" || srv.OAuthClientSecretEnv != "") {
+				errs = append(errs, fmt.Errorf("server %q: oauth_client_id/oauth_client_secret_env need oauth = true", name))
+			}
+			if srv.OAuth && srv.OAuthClientSecretEnv != "" && srv.OAuthClientID == "" {
+				errs = append(errs, fmt.Errorf("server %q: oauth_client_secret_env needs oauth_client_id", name))
+			}
 			continue
+		}
+		if srv.OAuth {
+			errs = append(errs, fmt.Errorf("server %q: oauth only applies to url servers", name))
 		}
 		if len(srv.Headers) > 0 {
 			errs = append(errs, fmt.Errorf("server %q: headers only apply to url servers", name))

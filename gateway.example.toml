@@ -1,6 +1,7 @@
 [server]
 listen     = ":8080"
 public_url = "https://gw.example"
+data_dir   = "/data"     # gateway state such as upstream oauth credentials
 
 [auth]
 # OIDC issuer (Authelia, Keycloak, ...). Tokens must be JWTs with aud = audience.
@@ -55,3 +56,13 @@ url            = "https://mcp.example.com/mcp"
 headers        = { Authorization = "Bearer ${REMOTE_MCP_TOKEN}" }
 max_concurrent = 2      # overrides limits.max_concurrent_per_server
 call_timeout   = "120s" # overrides limits.call_timeout
+
+# remote upstream that requires oauth: the gateway logs in once via the
+# browser and refreshes tokens from then on. start the login with
+#   curl -H "Authorization: Bearer $GATEWAY_STATIC_TOKEN" https://gw.example/oauth/upstream/personal/notion/login
+# and open the returned url. registration uses the gateway's client metadata
+# document, falling back to dynamic registration; set oauth_client_id (and
+# oauth_client_secret_env) for servers that require a pre-registered client.
+[servers.notion]
+url   = "https://mcp.notion.com/mcp"
+oauth = true

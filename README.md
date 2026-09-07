@@ -67,6 +67,26 @@ Upstreams are either stdio (`command`) or remote streamable HTTP (`url` plus
 optional `headers`). Remote upstreams get the same health checks, restarts,
 limits and audit as local ones.
 
+## OAuth-protected upstreams
+
+A `url` server with `oauth = true` (Notion, for example) makes the gateway an
+OAuth client toward that server. Until you log in, the upstream sits in
+`needs_login` and its tools are absent. Start the login with your gateway
+bearer and open the returned URL:
+
+```sh
+curl -H "Authorization: Bearer $GATEWAY_STATIC_TOKEN" \
+  https://gw.example/oauth/upstream/personal/notion/login
+```
+
+The server redirects back to `/oauth/callback`, the gateway stores the
+credentials in `data_dir/state.db`, connects, and refreshes tokens silently
+from then on, across restarts. If the server revokes the grant the upstream
+returns to `needs_login`. Client registration uses the gateway's own client
+metadata document at `/oauth/client.json`, with dynamic registration as
+fallback; `oauth_client_id` and `oauth_client_secret_env` cover servers that
+require a pre-registered client.
+
 ## Auth
 
 The gateway is a resource server only. It validates JWT access tokens (`iss`,
