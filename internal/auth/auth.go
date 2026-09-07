@@ -127,21 +127,30 @@ func (a *Authenticator) verify(ctx context.Context, token string, r *http.Reques
 		a.cfg.Logger.WarnContext(ctx, "token rejected", "method", "oidc", "err", "audience mismatch", "aud", idt.Audience, "accepted", a.audience, "remote", r.RemoteAddr)
 		return nil, fmt.Errorf("%w: audience %v not accepted", sdkauth.ErrInvalidToken, idt.Audience)
 	}
+	// scopes arrive as a space-separated "scope" string (RFC 9068) or an
+	// "scp" array (fosite-based servers such as Authelia)
 	var claims struct {
-		Scope    string `json:"scope"`
-		ClientID string `json:"client_id"`
-		Azp      string `json:"azp"`
+		Scope    string   `json:"scope"`
+		Scp      []string `json:"scp"`
+		ClientID string   `json:"client_id"`
+		Azp      string   `json:"azp"`
 	}
 	if err := idt.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("%w: claims: %v", sdkauth.ErrInvalidToken, err)
 	}
+	scopes := append(strings.Fields(claims.Scope), claims.Scp...)
 	clientID := claims.ClientID
 	if clientID == "" {
 		clientID = claims.Azp
 	}
-	a.cfg.Logger.DebugContext(ctx, "authenticated", "method", "oidc", "sub", idt.Subject, "client_id", clientID)
+	if a.cfg.RequiredScope != "" && !slices.Contains(scopes, a.cfg.RequiredScope) {
+		a.cfg.Logger.WarnContext(ctx, "token lacks required scope", "method", "oidc", "sub", idt.Subject,
+			"client_id", clientID, "scopes", scopes, "required", a.cfg.RequiredScope, "remote", r.RemoteAddr)
+	} else {
+		a.cfg.Logger.DebugContext(ctx, "authenticated", "method", "oidc", "sub", idt.Subject, "client_id", clientID, "scopes", scopes)
+	}
 	return &sdkauth.TokenInfo{
-		Scopes:     strings.Fields(claims.Scope),
+		Scopes:     scopes,
 		Expiration: idt.Expiry,
 		UserID:     idt.Subject,
 		Extra:      map[string]any{"auth_method": "oidc", "client_id": clientID},

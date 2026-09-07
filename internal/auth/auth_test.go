@@ -165,6 +165,8 @@ func TestOIDCToken(t *testing.T) {
 		{"wrong aud", jwt.MapClaims{"aud": "other", "scope": "mcp:use"}, idp.key, 401},
 		{"wrong iss", jwt.MapClaims{"iss": "https://evil", "aud": "mcp-gateway", "scope": "mcp:use"}, idp.key, 401},
 		{"expired", jwt.MapClaims{"aud": "mcp-gateway", "scope": "mcp:use", "exp": time.Now().Add(-time.Minute).Unix()}, idp.key, 401},
+		{"scp array (fosite/authelia)", jwt.MapClaims{"aud": "mcp-gateway", "scp": []string{"openid", "mcp:use"}}, idp.key, 200},
+		{"scp array missing scope", jwt.MapClaims{"aud": "mcp-gateway", "scp": []string{"openid"}}, idp.key, 403},
 		{"missing scope", jwt.MapClaims{"aud": "mcp-gateway", "scope": "openid"}, idp.key, 403},
 		{"no scope claim", jwt.MapClaims{"aud": "mcp-gateway"}, idp.key, 403},
 	}
