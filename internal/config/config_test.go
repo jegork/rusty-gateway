@@ -74,6 +74,7 @@ func TestParseErrors(t *testing.T) {
 		{"bad url", minimal(cmd) + "\n[servers.r]\nurl = \"r.example/mcp\"\n", ok, "absolute http(s) url"},
 		{"headers on stdio", strings.Replace(minimal(cmd), `env = { KEY = "${SECRET}" }`, `headers = { X = "1" }`, 1), ok, "headers only apply"},
 		{"bad duration", minimal(cmd) + "\n[limits]\ncall_timeout = \"soon\"\n", ok, "invalid duration"},
+		{"bad stderr level", minimal(cmd) + "\nstderr_level = \"loud\"\n", ok, "stderr_level must be"},
 		{"negative limit", minimal(cmd) + "\n[limits]\nmax_concurrent = -1\n", ok, "not be negative"},
 		{"issuer without audience", strings.Replace(minimal(cmd), `static_token_env = "TOK"`, `issuer = "https://idp"`, 1), ok, "auth.audience is required"},
 	}

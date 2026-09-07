@@ -92,7 +92,12 @@ type Server_ struct {
 
 	MaxConcurrent int      `toml:"max_concurrent"` // overrides limits.max_concurrent_per_server
 	CallTimeout   Duration `toml:"call_timeout"`   // overrides limits.call_timeout
+	// StderrLevel is where the child's stderr goes: debug (default), info,
+	// warn, error, or discard.
+	StderrLevel string `toml:"stderr_level"`
 }
+
+var stderrLevels = map[string]bool{"": true, "debug": true, "info": true, "warn": true, "error": true, "discard": true}
 
 func (s Server_) Remote() bool { return s.URL != "" }
 
@@ -236,6 +241,9 @@ func (c *Config) validate() error {
 		}
 		if srv.MaxConcurrent < 0 || srv.CallTimeout.Duration < 0 {
 			errs = append(errs, fmt.Errorf("server %q: negative limit", name))
+		}
+		if !stderrLevels[srv.StderrLevel] {
+			errs = append(errs, fmt.Errorf("server %q: stderr_level must be debug, info, warn, error or discard", name))
 		}
 		if srv.Remote() {
 			if srv.Command != "" || len(srv.Args) > 0 || len(srv.Env) > 0 {

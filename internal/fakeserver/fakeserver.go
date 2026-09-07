@@ -26,9 +26,13 @@ const EnvFlag = "RG_FAKE_SERVER"
 //	RG_CRASH_ONCE=path     with RG_CRASH_AFTER_MS, only crash if path does not exist, creating it
 //	RG_TOOLS=a,b           extra no-op tool names beyond "echo"
 //	RG_NO_PING=1           answer ping with JSON-RPC method not found
+//	RG_STDERR=text         print text to stderr at startup
 func Main() {
 	if os.Getenv("RG_FAIL_START") != "" {
 		os.Exit(3)
+	}
+	if msg := os.Getenv("RG_STDERR"); msg != "" {
+		os.Stderr.WriteString(msg + "\n")
 	}
 	if f := os.Getenv("RG_CHILD_PID_FILE"); f != "" {
 		child := exec.Command("sleep", "300")

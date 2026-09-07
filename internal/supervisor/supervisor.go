@@ -3,9 +3,11 @@
 package supervisor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -56,7 +58,13 @@ type Spec struct {
 	Env     map[string]string
 	URL     string
 	Headers map[string]string
+	// StderrLevel is the slog level child stderr lines are logged at.
+	// nil means debug; StderrDiscard drops them.
+	StderrLevel *slog.Level
 }
+
+// StderrDiscard as StderrLevel drops the child's stderr entirely.
+var StderrDiscard = slog.Level(1000)
 
 func (s Spec) Remote() bool { return s.URL != "" }
 
@@ -316,7 +324,7 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 	} else {
 		cmd = exec.Command(u.spec.Command, u.spec.Args...)
 		cmd.Env = composeEnv(opts.BaseEnv, u.spec.Env)
-		cmd.Stderr = os.Stderr
+		cmd.Stderr = newStderrLogger(log, u.spec.StderrLevel)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		log.Debug("starting upstream", "command", u.spec.Command, "args", u.spec.Args, "env", redactEnv(cmd.Env))
 		transport = &mcp.CommandTransport{Command: cmd}
@@ -425,6 +433,56 @@ func (u *Upstream) shutdown(sess *mcp.ClientSession, pid int) {
 	}
 	_ = sess.Close()
 	killGroup(pid)
+}
+
+// stderrLogger turns a child's stderr into one structured log record per
+// line so upstream chatter never interleaves raw with the gateway's own log.
+type stderrLogger struct {
+	log   *slog.Logger
+	level slog.Level
+	buf   []byte
+}
+
+const maxStderrLine = 4096
+
+func newStderrLogger(log *slog.Logger, level *slog.Level) io.Writer {
+	l := slog.LevelDebug
+	if level != nil {
+		l = *level
+	}
+	if l == StderrDiscard {
+		return io.Discard
+	}
+	return &stderrLogger{log: log, level: l}
+}
+
+func (w *stderrLogger) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			break
+		}
+		w.emit(w.buf[:i])
+		w.buf = w.buf[i+1:]
+	}
+	// a partial line with no newline in sight is flushed rather than held forever
+	if len(w.buf) > maxStderrLine {
+		w.emit(w.buf)
+		w.buf = w.buf[:0]
+	}
+	return len(p), nil
+}
+
+func (w *stderrLogger) emit(line []byte) {
+	line = bytes.TrimRight(line, "\r")
+	if len(bytes.TrimSpace(line)) == 0 {
+		return
+	}
+	if len(line) > maxStderrLine {
+		line = line[:maxStderrLine]
+	}
+	w.log.Log(context.Background(), w.level, "upstream stderr", "line", string(line))
 }
 
 type headerTransport struct {

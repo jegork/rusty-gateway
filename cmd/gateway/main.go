@@ -86,6 +86,7 @@ func run(cfgPath string, log *slog.Logger) error {
 			id := gateway.UpstreamID(ns.Name, name)
 			specs = append(specs, supervisor.Spec{
 				ID: id, Command: srv.Command, Args: srv.Args, Env: srv.Env, URL: srv.URL, Headers: srv.Headers,
+				StderrLevel: stderrLevel(srv.StderrLevel),
 			})
 			limits.ServerConcurrency[id] = srv.MaxConcurrent
 			limits.ServerTimeout[id] = srv.CallTimeout.Duration
@@ -158,4 +159,18 @@ func run(cfgPath string, log *slog.Logger) error {
 		return err
 	}
 	return nil
+}
+
+func stderrLevel(name string) *slog.Level {
+	var l slog.Level
+	switch name {
+	case "":
+		return nil
+	case "discard":
+		l = supervisor.StderrDiscard
+	default:
+		// validated by config; slog understands debug/info/warn/error
+		_ = l.UnmarshalText([]byte(name))
+	}
+	return &l
 }

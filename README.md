@@ -42,6 +42,18 @@ Rows older than `audit.retention_days` are pruned daily.
 ./gateway audit tail -config gateway.toml -n 50 -f
 ```
 
+## Logging
+
+The gateway logs JSON to stderr. Each upstream's stderr is captured line by
+line and emitted as `upstream stderr` records tagged with the upstream ID, at
+debug level by default so it is silent unless you run with `-debug`. Set
+`stderr_level` per server to `info`/`warn`/`error` to surface a noisy or
+important server, or `discard` to drop it. Filter with:
+
+```sh
+docker logs gateway 2>&1 | jq -c 'select(.msg=="upstream stderr" and .upstream=="personal/tradingview") | .line'
+```
+
 ## Limits and resilience
 
 `[limits]` bounds in-flight tool calls globally, per namespace, and per

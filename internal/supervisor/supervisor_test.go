@@ -3,8 +3,12 @@ package supervisor
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -175,4 +179,53 @@ func TestServerWithoutPingStaysReady(t *testing.T) {
 	if st.State != "ready" || st.Restarts != 0 || st.PID != pid {
 		t.Errorf("upstream without ping support was restarted: %+v", st)
 	}
+}
+
+func TestStderrLoggerSplitsLines(t *testing.T) {
+	var sb strings.Builder
+	log := slog.New(slog.NewJSONHandler(&sb, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	w := newStderrLogger(log, nil)
+	w.Write([]byte("first line\r\npartial"))
+	w.Write([]byte(" rest\n\n   \n"))
+	w.Write([]byte(strings.Repeat("x", maxStderrLine+10)))
+	out := sb.String()
+	if strings.Count(out, "\n") != 3 {
+		t.Fatalf("want 3 records, got:\n%s", out)
+	}
+	if !strings.Contains(out, `"line":"first line"`) || !strings.Contains(out, `"line":"partial rest"`) {
+		t.Errorf("lines not joined/split correctly:\n%s", out)
+	}
+	if strings.Contains(out, "\\r") {
+		t.Errorf("carriage return leaked")
+	}
+	if w2 := newStderrLogger(log, &StderrDiscard); w2 != io.Discard {
+		t.Errorf("discard level should return io.Discard")
+	}
+}
+
+func TestChildStderrIsStructured(t *testing.T) {
+	var sb strings.Builder
+	var mu sync.Mutex
+	log := slog.New(slog.NewJSONHandler(lockedWriter{&sb, &mu}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	opts := fastOpts()
+	opts.Logger = log
+	s := New([]Spec{fakeSpec(t, "ns/chatty", map[string]string{"RG_STDERR": "hello from child"})}, opts)
+	s.Start(context.Background())
+	s.Stop()
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(sb.String(), `"msg":"upstream stderr","upstream":"ns/chatty","line":"hello from child"`) {
+		t.Errorf("child stderr not captured as structured record:\n%s", sb.String())
+	}
+}
+
+type lockedWriter struct {
+	w  *strings.Builder
+	mu *sync.Mutex
+}
+
+func (l lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
