@@ -1,0 +1,41 @@
+# works with `docker compose up` and `docker stack deploy` (Dokploy compose or swarm)
+services:
+  gateway:
+    image: ghcr.io/jegork/rusty-gateway:latest
+    ports:
+      - "8080:8080"
+    configs:
+      - source: gateway_toml
+        target: /etc/gateway/gateway.toml
+    environment:
+      GATEWAY_STATIC_TOKEN: ${GATEWAY_STATIC_TOKEN}
+      MARKETAUX_API_TOKEN: ${MARKETAUX_API_TOKEN}
+      HEVY_API_KEY: ${HEVY_API_KEY}
+      DOKPLOY_URL: ${DOKPLOY_URL}
+      DOKPLOY_API_KEY: ${DOKPLOY_API_KEY}
+    volumes:
+      - gateway-data:/data
+      - uv-cache:/var/cache/uv
+      - npm-cache:/var/cache/npm
+    healthcheck:
+      test: ["CMD", "gateway", "healthcheck", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 1g
+      restart_policy:
+        condition: any
+        delay: 5s
+
+configs:
+  gateway_toml:
+    file: ./gateway.toml
+
+volumes:
+  gateway-data:
+  uv-cache:
+  npm-cache:

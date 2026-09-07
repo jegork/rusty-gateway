@@ -92,22 +92,23 @@ multi-arch image at `ghcr.io/jegork/rusty-gateway:<tag>` (also `latest`).
 The image is private like the repo, so pulling from Dokploy needs a GitHub
 token with `read:packages`.
 
-```yaml
-services:
-  gateway:
-    image: ghcr.io/jegork/rusty-gateway:latest
-    ports: ["8080:8080"]
-    volumes:
-      - ./gateway.toml:/etc/gateway/gateway.toml:ro
-      - gateway-data:/data
-    environment:
-      GATEWAY_STATIC_TOKEN: ${GATEWAY_STATIC_TOKEN}
-      HEVY_API_KEY: ${HEVY_API_KEY}
-    mem_limit: 1g
-    restart: unless-stopped
-volumes:
-  gateway-data:
+The image runs as uid 1000 and ships node 22 with npm, plus uv/uvx, with
+writable caches at `/var/cache/uv` and `/var/cache/npm`. Reference those in
+`gateway.toml` env blocks. Prefer pre-installing servers over `npx -y` or
+`uvx` at start by layering on the image:
+
+```dockerfile
+FROM ghcr.io/jegork/rusty-gateway:latest
+USER root
+RUN npm install -g hevy-mcp && uv tool install tradingview-mcp-server
+USER gateway
 ```
+
+`docker-compose.yml` works for both `docker compose up` and
+`docker stack deploy`; the `deploy` block carries the memory limit and
+restart policy so Dokploy can run it in either mode. The compose file
+expects `gateway.toml` next to it and secrets from the environment. The
+container HEALTHCHECK uses `gateway healthcheck <url>`, so no curl is needed.
 
 `/healthz` reports `rss_bytes` per upstream, summed over the child and its
 descendants, so the memory a wrapper launcher spawns is visible.

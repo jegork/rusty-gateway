@@ -24,6 +24,13 @@ import (
 var version = "dev"
 
 func main() {
+	if len(os.Args) > 2 && os.Args[1] == "healthcheck" {
+		if err := runHealthcheck(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "audit" {
 		if err := runAudit(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
