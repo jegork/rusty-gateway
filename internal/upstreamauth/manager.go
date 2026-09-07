@@ -26,7 +26,9 @@ import (
 const (
 	CallbackPath       = "/oauth/callback"
 	ClientMetadataPath = "/oauth/client.json"
-	loginTimeout       = 10 * time.Minute
+	// a started login stays valid this long; AutoLogin starts a new one
+	// (and logs a new url) when it lapses
+	loginTimeout = time.Hour
 )
 
 // ErrLoginRequired is the supervisor's sentinel so the two packages agree.
@@ -198,6 +200,44 @@ func (p *persistingSource) Token() (*oauth2.Token, error) {
 		}
 	}
 	return tok, nil
+}
+
+// AutoLogin starts a login for every upstream without credentials and logs
+// the URL to open, repeating whenever a pending login lapses, until ctx ends
+// or the upstream is logged in.
+func (m *Manager) AutoLogin(ctx context.Context) {
+	m.mu.Lock()
+	var pending []*entry
+	for _, e := range m.entries {
+		if e.handler == nil {
+			pending = append(pending, e)
+		}
+	}
+	m.mu.Unlock()
+	for _, e := range pending {
+		go m.autoLogin(ctx, e)
+	}
+}
+
+func (m *Manager) autoLogin(ctx context.Context, e *entry) {
+	for {
+		m.mu.Lock()
+		ready := e.ready
+		m.mu.Unlock()
+		u, err := m.StartLogin(ctx, e.up.ID)
+		if err != nil {
+			m.log.Error("could not start upstream login; retry via the login endpoint", "upstream", e.up.ID, "err", err)
+			return
+		}
+		m.log.Warn("upstream needs login: open this url in a browser", "upstream", e.up.ID, "url", u, "valid_for", loginTimeout.String())
+		select {
+		case <-ready:
+			return
+		case <-ctx.Done():
+			return
+		case <-time.After(loginTimeout + time.Second):
+		}
+	}
 }
 
 // StartLogin runs the authorization flow for an upstream in the background

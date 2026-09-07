@@ -71,8 +71,15 @@ limits and audit as local ones.
 
 A `url` server with `oauth = true` (Notion, for example) makes the gateway an
 OAuth client toward that server. Until you log in, the upstream sits in
-`needs_login` and its tools are absent. Start the login with your gateway
-bearer and open the returned URL:
+`needs_login` and its tools are absent. On startup the gateway begins the
+login itself and logs the URL to open:
+
+```
+"msg":"upstream needs login: open this url in a browser","upstream":"personal/notion","url":"https://mcp.notion.com/authorize?..."
+```
+
+The URL is valid for an hour; a fresh one is logged when it lapses, or on
+demand with your gateway bearer:
 
 ```sh
 curl -H "Authorization: Bearer $GATEWAY_STATIC_TOKEN" \

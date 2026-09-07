@@ -158,6 +158,9 @@ func run(cfgPath string, log *slog.Logger) error {
 	sup.Start(ctx)
 	gw.RefreshAll()
 	defer sup.Stop()
+	if ua != nil {
+		ua.AutoLogin(ctx)
+	}
 
 	mux := newMux(cfg, authn, gw, sup, store, ua)
 

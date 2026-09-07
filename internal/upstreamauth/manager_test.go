@@ -303,3 +303,41 @@ func TestCallbackRejectsUnknownState(t *testing.T) {
 	}
 	_ = sdkauth.ErrInvalidToken
 }
+
+func TestAutoLoginLogsURLAndCompletes(t *testing.T) {
+	as := newFakeAS(t)
+	h := newHarness(t, as, t.TempDir()+"/state.db")
+	var sb strings.Builder
+	var mu sync.Mutex
+	h.mgr.log = slog.New(slog.NewTextHandler(lockedWriter{&sb, &mu}, nil))
+	go h.sup.Start(context.Background())
+	defer h.sup.Stop()
+	waitFor(t, "needs_login", func() bool { return h.state() == "needs_login" })
+
+	h.mgr.AutoLogin(context.Background())
+	var authURL string
+	waitFor(t, "url in log", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, line := range strings.Split(sb.String(), "\n") {
+			if i := strings.Index(line, "url="); i >= 0 && strings.Contains(line, "open this url") {
+				authURL = strings.Trim(strings.Fields(line[i+4:])[0], `"`)
+				return true
+			}
+		}
+		return false
+	})
+	browse(t, authURL)
+	waitFor(t, "ready", func() bool { return h.state() == "ready" })
+}
+
+type lockedWriter struct {
+	w  *strings.Builder
+	mu *sync.Mutex
+}
+
+func (l lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}

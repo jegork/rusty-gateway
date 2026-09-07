@@ -58,9 +58,10 @@ max_concurrent = 2      # overrides limits.max_concurrent_per_server
 call_timeout   = "120s" # overrides limits.call_timeout
 
 # remote upstream that requires oauth: the gateway logs in once via the
-# browser and refreshes tokens from then on. start the login with
+# browser and refreshes tokens from then on. on startup the log prints the
+# url to open; re-trigger any time with
 #   curl -H "Authorization: Bearer $GATEWAY_STATIC_TOKEN" https://gw.example/oauth/upstream/personal/notion/login
-# and open the returned url. registration uses the gateway's client metadata
+# registration uses the gateway's client metadata
 # document, falling back to dynamic registration; set oauth_client_id (and
 # oauth_client_secret_env) for servers that require a pre-registered client.
 [servers.notion]
