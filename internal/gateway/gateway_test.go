@@ -138,6 +138,13 @@ func TestNamespacesPrefixToolsAndShareProcesses(t *testing.T) {
 	if got := toolNames(t, personal); strings.Join(got, ",") != "hevy__echo,hevy__slow,tv__echo,tv__quote,tv__slow" {
 		t.Errorf("personal tools: %v", got)
 	}
+	if res, _ := personal.ListTools(context.Background(), nil); res != nil {
+		for _, tool := range res.Tools {
+			if tool.Name == "tv__quote" && tool.Title != "tv: quote" {
+				t.Errorf("title should carry the server name, got %q", tool.Title)
+			}
+		}
+	}
 	if got := toolNames(t, ops); strings.Join(got, ",") != "dokploy__deploy,dokploy__echo,dokploy__logs,dokploy__slow" {
 		t.Errorf("ops tools: %v", got)
 	}

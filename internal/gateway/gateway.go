@@ -170,9 +170,15 @@ func (g *Gateway) syncLocked(ns *nsServer) {
 			name := srvName + Separator + t.Name
 			pt := *t
 			pt.Name = name
-			if pt.Title == "" {
-				pt.Title = t.Name
+			// clients display the title, so the provenance has to be there too
+			title := t.Title
+			if title == "" && t.Annotations != nil {
+				title = t.Annotations.Title
 			}
+			if title == "" {
+				title = t.Name
+			}
+			pt.Title = srvName + ": " + title
 			enc, _ := json.Marshal(&pt)
 			want[name] = string(enc)
 			if ns.registered[name] == want[name] {

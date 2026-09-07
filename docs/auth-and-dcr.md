@@ -31,6 +31,8 @@ Cost: one Authelia client block per MCP client, and one `--client-id` flag per C
 
 Every client must use the JWT access token profile so the gateway can validate with JWKS.
 
+**Scopes.** Codex and ChatGPT request `openid profile email` on top of `mcp:use`, and Authelia rejects any scope not listed on the client, so every client lists all five. The gateway only checks `mcp:use`.
+
 **Audience is per namespace.** MCP clients send `resource=<the endpoint URL they connect to>` (RFC 8707), so Claude Code asking for `/mcp/personal` sends `resource=https://gw.example/mcp/personal`. Authelia only issues a token for a resource listed in the client's `audience`, so list every namespace URL there. The gateway accepts a token whose `aud` is any of its namespace URLs or its `public_url`, and serves per-namespace metadata at `/.well-known/oauth-protected-resource/mcp/{ns}` so clients discover the right resource value.
 
 The provider itself needs a signing key the first time OIDC is enabled. Generate one with `authelia crypto pair rsa generate --bits 4096` and a random `hmac_secret`; both can also come from files via `AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE` and `AUTHELIA_IDENTITY_PROVIDERS_OIDC_JWKS_0_KEY_FILE`.
@@ -54,7 +56,7 @@ identity_providers:
         authorization_policy: two_factor
         redirect_uris:
           - http://localhost:3000/callback   # match --callback-port
-        scopes: [openid, offline_access, mcp:use]
+        scopes: [openid, profile, email, offline_access, mcp:use]
         audience: [https://gw.example/mcp/personal, https://gw.example/mcp/ops]
         grant_types: [authorization_code, refresh_token]
         response_types: [code]
@@ -69,7 +71,7 @@ identity_providers:
         redirect_uris:
           - https://claude.ai/api/mcp/auth_callback
           - https://claude.com/api/mcp/auth_callback
-        scopes: [openid, offline_access, mcp:use]
+        scopes: [openid, profile, email, offline_access, mcp:use]
         audience: [https://gw.example/mcp/personal, https://gw.example/mcp/ops]
         grant_types: [authorization_code, refresh_token]
         response_types: [code]
@@ -83,7 +85,7 @@ identity_providers:
         authorization_policy: two_factor
         redirect_uris:
           - https://chatgpt.com/connector_platform_oauth_redirect
-        scopes: [openid, profile, email, offline_access, mcp:use]   # chatgpt requests profile and email
+        scopes: [openid, profile, email, offline_access, mcp:use]
         audience: [https://gw.example/mcp/personal, https://gw.example/mcp/ops]
         grant_types: [authorization_code, refresh_token]
         response_types: [code]
@@ -97,7 +99,7 @@ identity_providers:
         authorization_policy: two_factor
         redirect_uris:
           - http://localhost:8432/oauth/callback   # match oauth.callback_url below
-        scopes: [openid, offline_access, mcp:use]
+        scopes: [openid, profile, email, offline_access, mcp:use]
         audience: [https://gw.example/mcp/personal, https://gw.example/mcp/ops]
         grant_types: [authorization_code, refresh_token]
         response_types: [code]
