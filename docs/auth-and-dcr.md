@@ -31,9 +31,20 @@ Cost: one Authelia client block per MCP client, and one `--client-id` flag per C
 
 Every client must use the JWT access token profile so the gateway can validate with JWKS. The `audience` must equal `auth.audience` in the gateway config, and the gateway's `public_url` should be the same value so RFC 8707 `resource` values match.
 
+The provider itself needs a signing key the first time OIDC is enabled. Generate one with `authelia crypto pair rsa generate --bits 4096` and a random `hmac_secret`; both can also come from files via `AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE` and `AUTHELIA_IDENTITY_PROVIDERS_OIDC_JWKS_0_KEY_FILE`.
+
 ```yaml
 identity_providers:
   oidc:
+    hmac_secret: '<64 random bytes, hex>'
+    jwks:
+      - key_id: main
+        algorithm: RS256
+        use: sig
+        key: |
+          -----BEGIN PRIVATE KEY-----
+          ...
+          -----END PRIVATE KEY-----
     clients:
       - client_id: claude-code
         client_name: Claude Code
@@ -59,6 +70,7 @@ identity_providers:
         scopes: [openid, offline_access, mcp:use]
         audience: [https://gw.example]
         grant_types: [authorization_code, refresh_token]
+        response_types: [code]
         token_endpoint_auth_method: client_secret_post
         require_pkce: true
         pkce_challenge_method: S256
@@ -72,6 +84,7 @@ identity_providers:
         scopes: [openid, offline_access, mcp:use]
         audience: [https://gw.example]
         grant_types: [authorization_code, refresh_token]
+        response_types: [code]
         token_endpoint_auth_method: client_secret_post
         require_pkce: true
         pkce_challenge_method: S256
