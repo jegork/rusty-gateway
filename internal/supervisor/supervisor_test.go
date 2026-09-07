@@ -69,7 +69,7 @@ func TestOneChildPerUpstreamAndCleanStop(t *testing.T) {
 		t.Fatalf("want %d live children, got %v", len(specs), pids)
 	}
 	for _, st := range s.Statuses() {
-		if st.State != "ready" || st.Tools != 1 || st.RSSBytes == 0 {
+		if st.State != "ready" || st.Tools != 2 || st.RSSBytes == 0 {
 			t.Errorf("%+v", st)
 		}
 	}

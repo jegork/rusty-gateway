@@ -66,13 +66,22 @@ func run(cfgPath string, log *slog.Logger) error {
 
 	var specs []supervisor.Spec
 	var namespaces []gateway.Namespace
+	limits := gateway.Limits{
+		CallTimeout: cfg.Limits.CallTimeout.Duration, MaxConcurrent: cfg.Limits.MaxConcurrent,
+		PerNamespace: cfg.Limits.PerNamespace, PerServer: cfg.Limits.PerServer,
+		NamespaceConcurrency: map[string]int{}, ServerConcurrency: map[string]int{}, ServerTimeout: map[string]time.Duration{},
+	}
 	for _, ns := range cfg.Namespaces {
 		namespaces = append(namespaces, gateway.Namespace{Name: ns.Name, Servers: ns.Servers})
+		limits.NamespaceConcurrency[ns.Name] = ns.MaxConcurrent
 		for _, name := range ns.Servers {
 			srv := cfg.Servers[name]
+			id := gateway.UpstreamID(ns.Name, name)
 			specs = append(specs, supervisor.Spec{
-				ID: gateway.UpstreamID(ns.Name, name), Command: srv.Command, Args: srv.Args, Env: srv.Env,
+				ID: id, Command: srv.Command, Args: srv.Args, Env: srv.Env, URL: srv.URL, Headers: srv.Headers,
 			})
+			limits.ServerConcurrency[id] = srv.MaxConcurrent
+			limits.ServerTimeout[id] = srv.CallTimeout.Duration
 		}
 	}
 
@@ -81,7 +90,10 @@ func run(cfgPath string, log *slog.Logger) error {
 		Logger:   log,
 		OnChange: func(id string) { gw.Refresh(id) },
 	})
-	gw = gateway.New(sup, namespaces, version, log)
+	gw = gateway.New(sup, namespaces, gateway.Options{
+		Version: version, Logger: log, Limits: limits,
+		Breaker: gateway.BreakerConfig{Failures: cfg.Breaker.Failures, Cooldown: cfg.Breaker.Cooldown.Duration},
+	})
 
 	mux := http.NewServeMux()
 	if cfg.Audit.Path == "" {
@@ -116,7 +128,7 @@ func run(cfgPath string, log *slog.Logger) error {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
 		json.NewEncoder(w).Encode(map[string]any{
-			"version": version, "namespaces": gw.Namespaces(), "upstreams": statuses,
+			"version": version, "namespaces": gw.Namespaces(), "upstreams": statuses, "breakers": gw.Breakers(),
 		})
 	})
 

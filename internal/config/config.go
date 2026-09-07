@@ -3,11 +3,13 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -16,8 +18,39 @@ type Config struct {
 	Server     Server             `toml:"server"`
 	Auth       Auth               `toml:"auth"`
 	Audit      Audit              `toml:"audit"`
+	Limits     Limits             `toml:"limits"`
+	Breaker    Breaker            `toml:"breaker"`
 	Namespaces []Namespace        `toml:"namespace"`
 	Servers    map[string]Server_ `toml:"servers"`
+}
+
+// Limits bounds in-flight tool calls. Zero means unlimited for the
+// concurrency fields; CallTimeout zero means no deadline.
+type Limits struct {
+	CallTimeout   Duration `toml:"call_timeout"`
+	MaxConcurrent int      `toml:"max_concurrent"`
+	PerNamespace  int      `toml:"max_concurrent_per_namespace"`
+	PerServer     int      `toml:"max_concurrent_per_server"`
+}
+
+// Breaker opens an upstream's circuit after Failures consecutive errors or
+// timeouts and lets one trial call through after Cooldown. Failures zero
+// disables the breaker.
+type Breaker struct {
+	Failures int      `toml:"failures"`
+	Cooldown Duration `toml:"cooldown"`
+}
+
+// Duration parses TOML strings like "30s" or "2m".
+type Duration struct{ time.Duration }
+
+func (d *Duration) UnmarshalText(b []byte) error {
+	v, err := time.ParseDuration(string(b))
+	if err != nil {
+		return err
+	}
+	d.Duration = v
+	return nil
 }
 
 type Server struct {
@@ -42,17 +75,26 @@ type Audit struct {
 }
 
 type Namespace struct {
-	Name    string   `toml:"name"`
-	Servers []string `toml:"servers"`
+	Name          string   `toml:"name"`
+	Servers       []string `toml:"servers"`
+	MaxConcurrent int      `toml:"max_concurrent"` // overrides limits.max_concurrent_per_namespace
 }
 
-// Server_ is an upstream stdio MCP server definition. The trailing underscore
-// avoids clashing with the [server] listen block.
+// Server_ is an upstream MCP server: either a stdio command or a remote
+// streamable HTTP url. The trailing underscore avoids clashing with the
+// [server] listen block.
 type Server_ struct {
 	Command string            `toml:"command"`
 	Args    []string          `toml:"args"`
 	Env     map[string]string `toml:"env"`
+	URL     string            `toml:"url"`
+	Headers map[string]string `toml:"headers"`
+
+	MaxConcurrent int      `toml:"max_concurrent"` // overrides limits.max_concurrent_per_server
+	CallTimeout   Duration `toml:"call_timeout"`   // overrides limits.call_timeout
 }
+
+func (s Server_) Remote() bool { return s.URL != "" }
 
 var (
 	envRef   = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
@@ -99,6 +141,12 @@ func (c *Config) applyDefaults() {
 	if c.Audit.MaxPayloadKB == 0 {
 		c.Audit.MaxPayloadKB = 8
 	}
+	if c.Limits.CallTimeout.Duration == 0 {
+		c.Limits.CallTimeout.Duration = 60 * time.Second
+	}
+	if c.Breaker.Failures > 0 && c.Breaker.Cooldown.Duration == 0 {
+		c.Breaker.Cooldown.Duration = 30 * time.Second
+	}
 }
 
 func (c *Config) expand(lookup func(string) (string, bool)) error {
@@ -116,6 +164,9 @@ func (c *Config) expand(lookup func(string) (string, bool)) error {
 	for name, srv := range c.Servers {
 		for k, v := range srv.Env {
 			srv.Env[k] = expandOne(v)
+		}
+		for k, v := range srv.Headers {
+			srv.Headers[k] = expandOne(v)
 		}
 		c.Servers[name] = srv
 	}
@@ -144,6 +195,12 @@ func (c *Config) validate() error {
 	if c.Auth.StaticTokenEnv != "" && c.Auth.StaticToken == "" {
 		errs = append(errs, fmt.Errorf("auth.static_token_env: %s is unset or empty", c.Auth.StaticTokenEnv))
 	}
+	if c.Limits.MaxConcurrent < 0 || c.Limits.PerNamespace < 0 || c.Limits.PerServer < 0 || c.Limits.CallTimeout.Duration < 0 {
+		errs = append(errs, errors.New("limits: values must not be negative"))
+	}
+	if c.Breaker.Failures < 0 || c.Breaker.Cooldown.Duration < 0 {
+		errs = append(errs, errors.New("breaker: values must not be negative"))
+	}
 	if len(c.Namespaces) == 0 {
 		errs = append(errs, errors.New("at least one [[namespace]] is required"))
 	}
@@ -156,6 +213,9 @@ func (c *Config) validate() error {
 			errs = append(errs, fmt.Errorf("namespace %q: duplicate", ns.Name))
 		}
 		seen[ns.Name] = true
+		if ns.MaxConcurrent < 0 {
+			errs = append(errs, fmt.Errorf("namespace %q: negative max_concurrent", ns.Name))
+		}
 		if len(ns.Servers) == 0 {
 			errs = append(errs, fmt.Errorf("namespace %q: no servers", ns.Name))
 		}
@@ -169,8 +229,24 @@ func (c *Config) validate() error {
 		if !nameRule.MatchString(name) {
 			errs = append(errs, fmt.Errorf("server %q: name must match %s", name, nameRule))
 		}
+		if srv.MaxConcurrent < 0 || srv.CallTimeout.Duration < 0 {
+			errs = append(errs, fmt.Errorf("server %q: negative limit", name))
+		}
+		if srv.Remote() {
+			if srv.Command != "" || len(srv.Args) > 0 || len(srv.Env) > 0 {
+				errs = append(errs, fmt.Errorf("server %q: url and command/args/env are mutually exclusive", name))
+			}
+			u, err := url.Parse(srv.URL)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				errs = append(errs, fmt.Errorf("server %q: url must be an absolute http(s) url, got %q", name, srv.URL))
+			}
+			continue
+		}
+		if len(srv.Headers) > 0 {
+			errs = append(errs, fmt.Errorf("server %q: headers only apply to url servers", name))
+		}
 		if srv.Command == "" {
-			errs = append(errs, fmt.Errorf("server %q: command is required", name))
+			errs = append(errs, fmt.Errorf("server %q: command or url is required", name))
 			continue
 		}
 		if !filepath.IsAbs(srv.Command) {

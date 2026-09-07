@@ -15,13 +15,24 @@ path           = "/data/audit.db"
 retention_days = 90
 max_payload_kb = 8
 
+[limits]
+call_timeout                 = "60s"   # per tool call, queue time included
+max_concurrent               = 32      # gateway-wide; 0 = unlimited
+max_concurrent_per_namespace = 16
+max_concurrent_per_server    = 4
+
+[breaker]
+failures = 5      # consecutive transport errors/timeouts before opening; 0 disables
+cooldown = "30s"  # then one trial call is let through
+
 [[namespace]]
 name    = "personal"
 servers = ["tradingview", "hevy"]
 
 [[namespace]]
-name    = "ops"
-servers = ["dokploy"]
+name           = "ops"
+servers        = ["dokploy", "remote-example"]
+max_concurrent = 4          # overrides limits.max_concurrent_per_namespace
 
 [servers.tradingview]
 command = "/usr/local/bin/uvx"
@@ -35,3 +46,10 @@ env     = { HEVY_API_KEY = "${HEVY_API_KEY}" }
 [servers.dokploy]
 command = "/usr/local/bin/dokploy-mcp"
 env     = { DOKPLOY_URL = "${DOKPLOY_URL}", DOKPLOY_API_KEY = "${DOKPLOY_API_KEY}" }
+
+# remote streamable HTTP upstream; headers are sent on every request
+[servers.remote-example]
+url            = "https://mcp.example.com/mcp"
+headers        = { Authorization = "Bearer ${REMOTE_MCP_TOKEN}" }
+max_concurrent = 2      # overrides limits.max_concurrent_per_server
+call_timeout   = "120s" # overrides limits.call_timeout

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeExec(t *testing.T) string {
@@ -69,6 +70,11 @@ func TestParseErrors(t *testing.T) {
 		{"unknown field", minimal(cmd) + "\n[bogus]\nx = 1\n", ok, "bogus"},
 		{"bad namespace name", strings.Replace(minimal(cmd), `name = "personal"`, `name = "Per Sonal"`, 1), ok, "must match"},
 		{"no auth", strings.Replace(minimal(cmd), `static_token_env = "TOK"`, ``, 1), ok, "auth: set"},
+		{"url with command", minimal(cmd) + "\n[servers.r]\nurl = \"https://r.example/mcp\"\ncommand = \"/bin/x\"\n", ok, "mutually exclusive"},
+		{"bad url", minimal(cmd) + "\n[servers.r]\nurl = \"r.example/mcp\"\n", ok, "absolute http(s) url"},
+		{"headers on stdio", strings.Replace(minimal(cmd), `env = { KEY = "${SECRET}" }`, `headers = { X = "1" }`, 1), ok, "headers only apply"},
+		{"bad duration", minimal(cmd) + "\n[limits]\ncall_timeout = \"soon\"\n", ok, "invalid duration"},
+		{"negative limit", minimal(cmd) + "\n[limits]\nmax_concurrent = -1\n", ok, "not be negative"},
 		{"issuer without audience", strings.Replace(minimal(cmd), `static_token_env = "TOK"`, `issuer = "https://idp"`, 1), ok, "auth.audience is required"},
 	}
 	for _, tc := range cases {
@@ -87,5 +93,39 @@ func TestNonExecutableCommandRejected(t *testing.T) {
 	_, err := Parse([]byte(minimal(p)), lookup(map[string]string{"TOK": "t", "SECRET": "s"}))
 	if err == nil || !strings.Contains(err.Error(), "not executable") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRemoteServerAndLimits(t *testing.T) {
+	cmd := writeExec(t)
+	src := minimal(cmd) + `
+[limits]
+call_timeout = "5s"
+max_concurrent = 10
+[breaker]
+failures = 3
+[servers.r]
+url = "https://r.example/mcp"
+headers = { Authorization = "Bearer ${RTOK}" }
+max_concurrent = 2
+call_timeout = "90s"
+`
+	c, err := Parse([]byte(src), lookup(map[string]string{"TOK": "t", "SECRET": "s", "RTOK": "rt"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := c.Servers["r"]
+	if !r.Remote() || r.Headers["Authorization"] != "Bearer rt" || r.MaxConcurrent != 2 || r.CallTimeout.Duration != 90*time.Second {
+		t.Errorf("%+v", r)
+	}
+	if c.Limits.CallTimeout.Duration != 5*time.Second || c.Limits.MaxConcurrent != 10 {
+		t.Errorf("%+v", c.Limits)
+	}
+	if c.Breaker.Failures != 3 || c.Breaker.Cooldown.Duration != 30*time.Second {
+		t.Errorf("breaker default cooldown: %+v", c.Breaker)
+	}
+	c2, _ := Parse([]byte(minimal(cmd)), lookup(map[string]string{"TOK": "t", "SECRET": "s"}))
+	if c2.Limits.CallTimeout.Duration != 60*time.Second || c2.Breaker.Failures != 0 {
+		t.Errorf("defaults: %+v %+v", c2.Limits, c2.Breaker)
 	}
 }

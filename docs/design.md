@@ -38,7 +38,7 @@ The decisive simplification is **dropping multi-tenancy**. MetaMCP allocates per
 - Being an OAuth **authorization server** (issuing tokens, consent screens, DCR)
 - An admin web UI — config is a file in git
 - A custom inspector — the official `@modelcontextprotocol/inspector` already points at any endpoint
-- Hosting remote (HTTP) upstreams — stdio only for v1; see Open Questions
+- Tool discovery modes beyond the full merged list (tracked in issue #2)
 
 ---
 
@@ -199,7 +199,7 @@ See `gateway.example.toml`. `${VAR}` interpolates from the host environment at l
 ## 11. Open questions
 
 1. ~~Does Authelia support DCR?~~ No. Resolved in [auth-and-dcr.md](auth-and-dcr.md).
-2. **Remote (HTTP) upstreams** — out of scope for v1. `Upstream` currently assumes a subprocess; a remote variant would need `Tools`, `CallTool` and `Status` behind an interface.
+2. ~~Remote (HTTP) upstreams~~ — implemented as `url` servers sharing the same supervisor loop.
 3. **Tool-level authorization** — is `mcp:use` enough, or eventually per-namespace scopes (`mcp:personal`, `mcp:ops`)?
 4. **Cold-start cost** — upstreams start at boot. Acceptable, or start lazily on first use per namespace?
 5. **Migration path** — run alongside MetaMCP on a different port and cut over one namespace at a time, or replace outright?

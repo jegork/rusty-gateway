@@ -31,16 +31,21 @@ func spec(id string, env map[string]string) supervisor.Spec {
 }
 
 type fixture struct {
-	sup   *supervisor.Supervisor
-	gw    *Gateway
-	http  *httptest.Server
-	calls chan Call
+	sup     *supervisor.Supervisor
+	gw      *Gateway
+	http    *httptest.Server
+	calls   chan Call
+	limits  Limits
+	breaker BreakerConfig
 }
 
-func setup(t *testing.T, namespaces []Namespace, specs []supervisor.Spec) *fixture {
+func setup(t *testing.T, namespaces []Namespace, specs []supervisor.Spec, opts ...func(*fixture)) *fixture {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	f := &fixture{calls: make(chan Call, 64)}
+	for _, o := range opts {
+		o(f)
+	}
 	var gw *Gateway
 	f.sup = supervisor.New(specs, supervisor.Options{
 		PingInterval: 200 * time.Millisecond, BackoffMin: 20 * time.Millisecond,
@@ -48,7 +53,7 @@ func setup(t *testing.T, namespaces []Namespace, specs []supervisor.Spec) *fixtu
 		Logger:   log,
 		OnChange: func(id string) { gw.Refresh(id) },
 	})
-	gw = New(f.sup, namespaces, "test", log)
+	gw = New(f.sup, namespaces, Options{Version: "test", Logger: log, Limits: f.limits, Breaker: f.breaker})
 	gw.Observe = func(_ context.Context, c Call) { f.calls <- c }
 	f.gw = gw
 	f.sup.Start(context.Background())
@@ -128,10 +133,10 @@ func TestNamespacesPrefixToolsAndShareProcesses(t *testing.T) {
 
 	personal := sessions[8]
 	ops := sessions[9]
-	if got := toolNames(t, personal); strings.Join(got, ",") != "hevy__echo,tv__echo,tv__quote" {
+	if got := toolNames(t, personal); strings.Join(got, ",") != "hevy__echo,hevy__slow,tv__echo,tv__quote,tv__slow" {
 		t.Errorf("personal tools: %v", got)
 	}
-	if got := toolNames(t, ops); strings.Join(got, ",") != "dokploy__deploy,dokploy__echo,dokploy__logs" {
+	if got := toolNames(t, ops); strings.Join(got, ",") != "dokploy__deploy,dokploy__echo,dokploy__logs,dokploy__slow" {
 		t.Errorf("ops tools: %v", got)
 	}
 
@@ -168,7 +173,7 @@ func TestUnknownNamespaceIs404AndFailedUpstreamHidesTools(t *testing.T) {
 	waitFor(t, "broken to fail", func() bool { return f.sup.Statuses()[1].State == "failed" })
 	s := f.connect(t, "p")
 	defer s.Close()
-	if got := toolNames(t, s); strings.Join(got, ",") != "ok__echo" {
+	if got := toolNames(t, s); strings.Join(got, ",") != "ok__echo,ok__slow" {
 		t.Errorf("tools: %v", got)
 	}
 }
@@ -184,7 +189,7 @@ func TestToolsReappearAfterCrashRestart(t *testing.T) {
 		st := f.sup.Statuses()[0]
 		return st.State == "ready" && st.PID != first
 	})
-	waitFor(t, "tools back", func() bool { return len(toolNames(t, s)) == 1 })
+	waitFor(t, "tools back", func() bool { return len(toolNames(t, s)) == 2 })
 	if st := f.sup.Statuses()[0]; st.Restarts != 1 || st.State != "ready" {
 		t.Errorf("%+v", st)
 	}

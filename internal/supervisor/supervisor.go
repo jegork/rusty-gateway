@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"sort"
 	"sync"
 	"syscall"
@@ -42,14 +45,19 @@ func (s State) String() string {
 	return "unknown"
 }
 
-// Spec describes how to launch one upstream. ID is the stable key
-// ("personal/tradingview"), never derived from the command string.
+// Spec describes one upstream: a stdio command or a remote streamable HTTP
+// endpoint. ID is the stable key ("personal/tradingview"), never derived from
+// the command string.
 type Spec struct {
 	ID      string
 	Command string
 	Args    []string
 	Env     map[string]string
+	URL     string
+	Headers map[string]string
 }
+
+func (s Spec) Remote() bool { return s.URL != "" }
 
 type Options struct {
 	PingInterval time.Duration
@@ -118,6 +126,7 @@ type Upstream struct {
 
 type Status struct {
 	ID       string `json:"id"`
+	Kind     string `json:"kind"`
 	State    string `json:"state"`
 	PID      int    `json:"pid,omitempty"`
 	Restarts int    `json:"restarts"`
@@ -203,8 +212,11 @@ func (u *Upstream) ID() string { return u.spec.ID }
 func (u *Upstream) Status() Status {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
-	st := Status{ID: u.spec.ID, State: u.state.String(), Restarts: u.restarts, Tools: len(u.tools)}
-	if u.state == Ready {
+	st := Status{ID: u.spec.ID, Kind: "stdio", State: u.state.String(), Restarts: u.restarts, Tools: len(u.tools)}
+	if u.spec.Remote() {
+		st.Kind = "http"
+	}
+	if u.state == Ready && !u.spec.Remote() {
 		st.PID = u.pid
 		st.RSSBytes = groupRSS(u.pid)
 	}
@@ -292,11 +304,22 @@ func (u *Upstream) run(ctx context.Context, firstDone func()) {
 // tears down the whole process group. It returns the reason the run ended.
 func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()) error {
 	opts := u.sup.opts
-	cmd := exec.Command(u.spec.Command, u.spec.Args...)
-	cmd.Env = composeEnv(opts.BaseEnv, u.spec.Env)
-	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	log.Debug("starting upstream", "command", u.spec.Command, "args", u.spec.Args, "env", redactEnv(cmd.Env))
+	var transport mcp.Transport
+	var cmd *exec.Cmd
+	if u.spec.Remote() {
+		log.Debug("connecting upstream", "url", u.spec.URL, "headers", slices.Sorted(maps.Keys(u.spec.Headers)))
+		transport = &mcp.StreamableClientTransport{
+			Endpoint:   u.spec.URL,
+			HTTPClient: &http.Client{Transport: headerTransport{headers: u.spec.Headers}},
+		}
+	} else {
+		cmd = exec.Command(u.spec.Command, u.spec.Args...)
+		cmd.Env = composeEnv(opts.BaseEnv, u.spec.Env)
+		cmd.Stderr = os.Stderr
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		log.Debug("starting upstream", "command", u.spec.Command, "args", u.spec.Args, "env", redactEnv(cmd.Env))
+		transport = &mcp.CommandTransport{Command: cmd}
+	}
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "rusty-gateway", Version: "dev"}, &mcp.ClientOptions{
 		ToolListChangedHandler: func(ctx context.Context, _ *mcp.ToolListChangedRequest) {
@@ -305,18 +328,19 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 			}
 		},
 	})
-	transport := &mcp.CommandTransport{Command: cmd}
-
 	startCtx, cancel := context.WithTimeout(ctx, opts.StartTimeout)
 	sess, err := client.Connect(startCtx, transport, nil)
 	cancel()
 	if err != nil {
-		if cmd.Process != nil {
+		if cmd != nil && cmd.Process != nil {
 			killGroup(cmd.Process.Pid)
 		}
 		return fmt.Errorf("connect: %w", err)
 	}
-	pid := cmd.Process.Pid
+	pid := 0
+	if cmd != nil {
+		pid = cmd.Process.Pid
+	}
 	u.mu.Lock()
 	u.session, u.cmd, u.pid = sess, cmd, pid
 	u.mu.Unlock()
@@ -392,11 +416,32 @@ func (u *Upstream) refreshTools(ctx context.Context) error {
 
 // shutdown terminates the child and everything it spawned. The SDK's Close
 // only signals the direct child, so the process group is swept afterwards
-// to catch grandchildren left behind by uvx/npx style wrappers.
+// to catch grandchildren left behind by uvx/npx style wrappers. Remote
+// upstreams only close the session.
 func (u *Upstream) shutdown(sess *mcp.ClientSession, pid int) {
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	if pid > 0 {
+		_ = syscall.Kill(-pid, syscall.SIGTERM)
+	}
 	_ = sess.Close()
 	killGroup(pid)
+}
+
+type headerTransport struct {
+	headers map[string]string
+}
+
+func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	for k, v := range h.headers {
+		r.Header.Set(k, v)
+	}
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+func killGroup(pid int) {
+	if pid > 0 {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+	}
 }
 
 // groupRSS sums resident memory of the child and its descendants, so wrapper
@@ -416,12 +461,6 @@ func groupRSS(pid int) uint64 {
 		}
 	}
 	return total
-}
-
-func killGroup(pid int) {
-	if pid > 0 {
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
-	}
 }
 
 func composeEnv(base []string, extra map[string]string) []string {

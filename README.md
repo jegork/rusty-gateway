@@ -41,6 +41,19 @@ Rows older than `audit.retention_days` are pruned daily.
 ./gateway audit tail -config gateway.toml -n 50 -f
 ```
 
+## Limits and resilience
+
+`[limits]` bounds in-flight tool calls globally, per namespace, and per
+server (override with `max_concurrent` on a namespace or server). Queue time
+counts against `call_timeout`. `[breaker]` opens an upstream after N
+consecutive transport errors or timeouts, rejects calls immediately while
+open, and lets one trial call through after the cooldown. Breaker states are
+in `/healthz`. Tool-level errors (`isError: true`) never trip the breaker.
+
+Upstreams are either stdio (`command`) or remote streamable HTTP (`url` plus
+optional `headers`). Remote upstreams get the same health checks, restarts,
+limits and audit as local ones.
+
 ## Auth
 
 The gateway is a resource server only. It validates JWT access tokens (`iss`,

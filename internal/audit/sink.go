@@ -91,6 +91,8 @@ func (s *Sink) row(ctx context.Context, c gateway.Call) Row {
 	switch {
 	case errors.Is(c.Err, context.DeadlineExceeded):
 		r.Status, r.Error = "timeout", c.Err.Error()
+	case errors.Is(c.Err, gateway.ErrCircuitOpen):
+		r.Status, r.Error = "rejected", c.Err.Error()
 	case c.Err != nil:
 		r.Status, r.Error = "error", c.Err.Error()
 	case c.Result != nil && c.Result.IsError:

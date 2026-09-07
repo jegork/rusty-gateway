@@ -5,6 +5,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -24,6 +25,13 @@ type Namespace struct {
 	Servers []string
 }
 
+type Options struct {
+	Version string
+	Logger  *slog.Logger
+	Limits  Limits
+	Breaker BreakerConfig
+}
+
 // Call is one completed tool dispatch, handed to Observe after the fact.
 type Call struct {
 	Namespace string
@@ -38,36 +46,64 @@ type Call struct {
 }
 
 type Gateway struct {
-	sup     *supervisor.Supervisor
-	log     *slog.Logger
-	version string
+	sup    *supervisor.Supervisor
+	log    *slog.Logger
+	limits Limits
+	global semaphore
 	// Observe, if set, is called after every tool call. It must not block.
 	Observe func(context.Context, Call)
 
-	mu      sync.Mutex
-	servers map[string]*nsServer
+	mu       sync.Mutex
+	servers  map[string]*nsServer
+	perSrv   map[string]semaphore
+	breakers map[string]*breaker
 }
 
 type nsServer struct {
 	ns     Namespace
 	server *mcp.Server
+	sem    semaphore
 	// registered maps prefixed tool name to the JSON of the tool it was
 	// registered with, so unchanged tools are not re-added (which would spam
 	// list_changed notifications)
 	registered map[string]string
 }
 
-func New(sup *supervisor.Supervisor, namespaces []Namespace, version string, log *slog.Logger) *Gateway {
-	g := &Gateway{sup: sup, log: log, version: version, servers: map[string]*nsServer{}}
+func New(sup *supervisor.Supervisor, namespaces []Namespace, opts Options) *Gateway {
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
+	g := &Gateway{
+		sup: sup, log: opts.Logger, limits: opts.Limits,
+		global:   newSemaphore(opts.Limits.MaxConcurrent),
+		servers:  map[string]*nsServer{},
+		perSrv:   map[string]semaphore{},
+		breakers: map[string]*breaker{},
+	}
 	for _, ns := range namespaces {
 		g.servers[ns.Name] = &nsServer{
 			ns: ns,
-			server: mcp.NewServer(&mcp.Implementation{Name: "rusty-gateway/" + ns.Name, Version: version},
-				&mcp.ServerOptions{Logger: log.With("namespace", ns.Name)}),
+			server: mcp.NewServer(&mcp.Implementation{Name: "rusty-gateway/" + ns.Name, Version: opts.Version},
+				&mcp.ServerOptions{Logger: opts.Logger.With("namespace", ns.Name)}),
+			sem:        newSemaphore(opts.Limits.namespaceLimit(ns.Name)),
 			registered: map[string]string{},
+		}
+		for _, srv := range ns.Servers {
+			id := UpstreamID(ns.Name, srv)
+			g.perSrv[id] = newSemaphore(opts.Limits.serverLimit(id))
+			g.breakers[id] = newBreaker(opts.Breaker)
 		}
 	}
 	return g
+}
+
+// Breakers reports the circuit state per upstream ID.
+func (g *Gateway) Breakers() map[string]string {
+	out := make(map[string]string, len(g.breakers))
+	for id, b := range g.breakers {
+		out[id] = b.state()
+	}
+	return out
 }
 
 // UpstreamID is the supervisor key for a server within a namespace.
@@ -116,7 +152,7 @@ func (g *Gateway) syncLocked(ns *nsServer) {
 			if ns.registered[name] == want[name] {
 				continue
 			}
-			ns.server.AddTool(&pt, g.handler(ns.ns.Name, srvName, t.Name, u))
+			ns.server.AddTool(&pt, g.handler(ns, srvName, t.Name, u))
 			added++
 		}
 	}
@@ -133,14 +169,18 @@ func (g *Gateway) syncLocked(ns *nsServer) {
 	g.log.Debug("namespace synced", "namespace", ns.ns.Name, "tools", len(want), "added", added, "removed", len(stale))
 }
 
-func (g *Gateway) handler(namespace, server, tool string, u *supervisor.Upstream) mcp.ToolHandler {
+func (g *Gateway) handler(ns *nsServer, server, tool string, u *supervisor.Upstream) mcp.ToolHandler {
+	namespace := ns.ns.Name
+	id := UpstreamID(namespace, server)
+	srvSem, brk := g.perSrv[id], g.breakers[id]
+	timeout := g.limits.timeout(id)
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		started := time.Now()
 		args := req.Params.Arguments
 		if len(args) == 0 {
 			args = json.RawMessage(`{}`)
 		}
-		res, err := u.CallTool(ctx, &mcp.CallToolParams{
+		res, err := g.dispatch(ctx, ns, srvSem, brk, timeout, u, &mcp.CallToolParams{
 			Name:           tool,
 			Arguments:      args,
 			InputResponses: req.Params.InputResponses,
@@ -158,6 +198,36 @@ func (g *Gateway) handler(namespace, server, tool string, u *supervisor.Upstream
 		}
 		return res, nil
 	}
+}
+
+// dispatch applies the breaker, the three concurrency limits (queue time
+// counts against the call deadline) and the timeout around one upstream call.
+func (g *Gateway) dispatch(ctx context.Context, ns *nsServer, srvSem semaphore, brk *breaker, timeout time.Duration,
+	u *supervisor.Upstream, params *mcp.CallToolParams) (*mcp.CallToolResult, error) {
+	if !brk.allow() {
+		return nil, ErrCircuitOpen
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	for _, sem := range []semaphore{g.global, ns.sem, srvSem} {
+		if err := sem.acquire(ctx); err != nil {
+			return nil, fmt.Errorf("waiting for capacity: %w", err)
+		}
+		defer sem.release()
+	}
+	res, err := u.CallTool(ctx, params)
+	switch {
+	case err == nil:
+		brk.success()
+	case errors.Is(err, supervisor.ErrNotReady):
+		// the supervisor already tracks this; not a breaker signal
+	default:
+		brk.failure()
+	}
+	return res, err
 }
 
 // Handler serves POST/GET/DELETE /mcp/{ns} with streamable HTTP.

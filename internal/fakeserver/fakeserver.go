@@ -44,6 +44,18 @@ func Main() {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(req.Params.Arguments)}}}, nil
 	}
 	srv.AddTool(&mcp.Tool{Name: "echo", InputSchema: json.RawMessage(`{"type":"object"}`)}, echo)
+	// slow sleeps for {"ms": n} before answering, honoring cancellation
+	srv.AddTool(&mcp.Tool{Name: "slow", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			var in struct{ MS int `json:"ms"` }
+			json.Unmarshal(req.Params.Arguments, &in)
+			select {
+			case <-time.After(time.Duration(in.MS) * time.Millisecond):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "done"}}}, nil
+		})
 	if names := os.Getenv("RG_TOOLS"); names != "" {
 		for _, n := range strings.Split(names, ",") {
 			srv.AddTool(&mcp.Tool{Name: n, InputSchema: json.RawMessage(`{"type":"object"}`)}, echo)
