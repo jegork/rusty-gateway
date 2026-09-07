@@ -229,3 +229,15 @@ func (l lockedWriter) Write(p []byte) (int, error) {
 	defer l.mu.Unlock()
 	return l.w.Write(p)
 }
+
+func TestPingCarriesProtocolEnvelope(t *testing.T) {
+	s := New([]Spec{fakeSpec(t, "ns/strict", map[string]string{"RG_STRICT_META": "1"})}, fastOpts())
+	s.Start(context.Background())
+	defer s.Stop()
+	pid := s.LivePIDs()[0]
+	time.Sleep(700 * time.Millisecond)
+	st := s.Statuses()[0]
+	if st.State != "ready" || st.Restarts != 0 || st.PID != pid {
+		t.Errorf("strict upstream restarted because of ping: %+v", st)
+	}
+}

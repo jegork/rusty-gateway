@@ -26,6 +26,7 @@ const EnvFlag = "RG_FAKE_SERVER"
 //	RG_CRASH_ONCE=path     with RG_CRASH_AFTER_MS, only crash if path does not exist, creating it
 //	RG_TOOLS=a,b           extra no-op tool names beyond "echo"
 //	RG_NO_PING=1           answer ping with JSON-RPC method not found
+//	RG_STRICT_META=1       reject requests on the 2026-07-28 protocol that lack the _meta envelope, like notion
 //	RG_STDERR=text         print text to stderr at startup
 func Main() {
 	if os.Getenv("RG_FAIL_START") != "" {
@@ -46,6 +47,21 @@ func Main() {
 		go func() { time.Sleep(time.Duration(d) * time.Millisecond); os.Exit(4) }()
 	}
 	srv := mcp.NewServer(&mcp.Implementation{Name: "fake", Version: "0"}, nil)
+	if os.Getenv("RG_STRICT_META") != "" {
+		srv.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+				ss, _ := req.GetSession().(*mcp.ServerSession)
+				newProto := ss != nil && ss.InitializeParams() != nil && ss.InitializeParams().ProtocolVersion >= "2026-07-28"
+				if method != "initialize" && !strings.HasPrefix(method, "notifications/") && newProto {
+					p := req.GetParams()
+					if p == nil || p.GetMeta() == nil || p.GetMeta()[mcp.MetaKeyProtocolVersion] == nil {
+						return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "the request is missing the required per-request envelope key(s): _meta"}
+					}
+				}
+				return next(ctx, method, req)
+			}
+		})
+	}
 	if os.Getenv("RG_NO_PING") != "" {
 		srv.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {

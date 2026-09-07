@@ -357,7 +357,8 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 		transport = &mcp.CommandTransport{Command: cmd}
 	}
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "rusty-gateway", Version: "dev"}, &mcp.ClientOptions{
+	client := mcp.NewClient(clientImpl, &mcp.ClientOptions{
+		Capabilities: clientCaps,
 		ToolListChangedHandler: func(ctx context.Context, _ *mcp.ToolListChangedRequest) {
 			if err := u.refreshTools(ctx); err != nil {
 				log.Warn("refreshing tools after list_changed", "err", err)
@@ -410,7 +411,7 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 			return fmt.Errorf("process exited: %w", errors.Join(err, errors.New("unexpected exit")))
 		case <-ticker.C:
 			pctx, cancel := context.WithTimeout(ctx, opts.PingInterval)
-			err := sess.Ping(pctx, nil)
+			err := sess.Ping(pctx, pingParams(sess))
 			cancel()
 			if err != nil && ctx.Err() == nil && !isMethodNotFound(err) {
 				u.shutdown(sess, pid)
@@ -418,6 +419,28 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 			}
 		}
 	}
+}
+
+var (
+	clientImpl = &mcp.Implementation{Name: "rusty-gateway", Version: "dev"}
+	// the gateway offers no roots, sampling or elicitation to upstreams;
+	// declared explicitly so the ping envelope below matches initialize
+	clientCaps = &mcp.ClientCapabilities{}
+)
+
+// pingParams carries the 2026-07-28 per-request _meta envelope. go-sdk
+// v1.7.0 injects it for every client method except Ping, and servers on the
+// new protocol reject a bare ping.
+func pingParams(sess *mcp.ClientSession) *mcp.PingParams {
+	p := &mcp.PingParams{}
+	if res := sess.InitializeResult(); res != nil && res.ProtocolVersion >= "2026-07-28" {
+		p.Meta = mcp.Meta{
+			mcp.MetaKeyProtocolVersion:    res.ProtocolVersion,
+			mcp.MetaKeyClientInfo:         clientImpl,
+			mcp.MetaKeyClientCapabilities: clientCaps,
+		}
+	}
+	return p
 }
 
 // awaitOAuth parks the upstream in NeedsLogin until the provider has
