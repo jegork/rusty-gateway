@@ -68,6 +68,28 @@ non-failed upstreams regardless of client sessions.
 | M2 namespaces, TOML config, streamable HTTP, tool prefixing | done |
 | M3 audit log: schema, redaction, buffered writer, read API, retention | done |
 | M4 auth: protected resource metadata, JWKS, static token | done |
-| M5 ops: Dockerfile, RSS metrics, memory limit | not started |
+| M5 ops: Dockerfile, RSS metrics, memory limit | done |
 
 Config reload on SIGHUP is not implemented; restart the process.
+
+## Deploy
+
+```yaml
+services:
+  gateway:
+    build: .
+    ports: ["8080:8080"]
+    volumes:
+      - ./gateway.toml:/etc/gateway/gateway.toml:ro
+      - gateway-data:/data
+    environment:
+      GATEWAY_STATIC_TOKEN: ${GATEWAY_STATIC_TOKEN}
+      HEVY_API_KEY: ${HEVY_API_KEY}
+    mem_limit: 1g
+    restart: unless-stopped
+volumes:
+  gateway-data:
+```
+
+`/healthz` reports `rss_bytes` per upstream, summed over the child and its
+descendants, so the memory a wrapper launcher spawns is visible.

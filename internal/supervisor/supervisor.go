@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 type State int
@@ -121,6 +122,7 @@ type Status struct {
 	PID      int    `json:"pid,omitempty"`
 	Restarts int    `json:"restarts"`
 	Tools    int    `json:"tools"`
+	RSSBytes uint64 `json:"rss_bytes,omitempty"`
 	Error    string `json:"error,omitempty"`
 }
 
@@ -204,6 +206,7 @@ func (u *Upstream) Status() Status {
 	st := Status{ID: u.spec.ID, State: u.state.String(), Restarts: u.restarts, Tools: len(u.tools)}
 	if u.state == Ready {
 		st.PID = u.pid
+		st.RSSBytes = groupRSS(u.pid)
 	}
 	if u.lastErr != nil {
 		st.Error = u.lastErr.Error()
@@ -394,6 +397,25 @@ func (u *Upstream) shutdown(sess *mcp.ClientSession, pid int) {
 	_ = syscall.Kill(-pid, syscall.SIGTERM)
 	_ = sess.Close()
 	killGroup(pid)
+}
+
+// groupRSS sums resident memory of the child and its descendants, so wrapper
+// launchers like uvx report the interpreter they spawned, not just themselves.
+func groupRSS(pid int) uint64 {
+	p, err := process.NewProcess(int32(pid))
+	if err != nil {
+		return 0
+	}
+	var total uint64
+	if m, err := p.MemoryInfo(); err == nil {
+		total += m.RSS
+	}
+	if kids, err := p.Children(); err == nil {
+		for _, k := range kids {
+			total += groupRSS(int(k.Pid))
+		}
+	}
+	return total
 }
 
 func killGroup(pid int) {

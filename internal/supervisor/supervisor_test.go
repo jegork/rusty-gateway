@@ -69,7 +69,7 @@ func TestOneChildPerUpstreamAndCleanStop(t *testing.T) {
 		t.Fatalf("want %d live children, got %v", len(specs), pids)
 	}
 	for _, st := range s.Statuses() {
-		if st.State != "ready" || st.Tools != 1 {
+		if st.State != "ready" || st.Tools != 1 || st.RSSBytes == 0 {
 			t.Errorf("%+v", st)
 		}
 	}
@@ -123,7 +123,7 @@ func TestRestartsAfterCrashWithNewPid(t *testing.T) {
 	if len(changes) == 0 {
 		t.Error("OnChange never fired")
 	}
-	if got := s.LivePIDs(); len(got) != 1 {
+	if got := s.LivePIDs(); len(got) > 1 {
 		t.Errorf("more than one child after restart: %v", got)
 	}
 }

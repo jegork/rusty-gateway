@@ -2,7 +2,7 @@
 
 A single-user MCP aggregator in Go. Replaces MetaMCP for a one-person deployment: namespaced endpoints over stdio upstreams, OAuth-protected, with a real audit log.
 
-**Status:** M0–M4 implemented · **Language:** Go · **Storage:** SQLite · **Date:** 2026-09-07
+**Status:** M0–M5 implemented · **Language:** Go · **Storage:** SQLite · **Date:** 2026-09-07
 
 ---
 
@@ -192,7 +192,7 @@ See `gateway.example.toml`. `${VAR}` interpolates from the host environment at l
 | M2 | Namespaces, config file, streamable HTTP endpoint, tool prefixing | done |
 | M3 | Audit log: schema, redaction, buffered writer, read API, retention | done |
 | M4 | Auth: protected-resource metadata, JWKS validation, static-token fallback | done |
-| M5 | Ops: per-child RSS metrics, Dockerfile, memory limit | pending |
+| M5 | Ops: per-child RSS metrics, Dockerfile, memory limit | done |
 
 ---
 
