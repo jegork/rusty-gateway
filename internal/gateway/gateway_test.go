@@ -175,7 +175,7 @@ func TestUnknownNamespaceIs404AndFailedUpstreamHidesTools(t *testing.T) {
 
 func TestToolsReappearAfterCrashRestart(t *testing.T) {
 	f := setup(t, []Namespace{{Name: "p", Servers: []string{"c"}}}, []supervisor.Spec{
-		spec("p/c", map[string]string{"RG_CRASH_AFTER_MS": "300"}),
+		spec("p/c", map[string]string{"RG_CRASH_AFTER_MS": "300", "RG_CRASH_ONCE": t.TempDir() + "/crashed"}),
 	})
 	first := f.sup.LivePIDs()[0]
 	s := f.connect(t, "p")
@@ -185,4 +185,7 @@ func TestToolsReappearAfterCrashRestart(t *testing.T) {
 		return st.State == "ready" && st.PID != first
 	})
 	waitFor(t, "tools back", func() bool { return len(toolNames(t, s)) == 1 })
+	if st := f.sup.Statuses()[0]; st.Restarts != 1 || st.State != "ready" {
+		t.Errorf("%+v", st)
+	}
 }

@@ -22,6 +22,7 @@ const EnvFlag = "RG_FAKE_SERVER"
 //	RG_FAIL_START=1        exit 3 immediately
 //	RG_CHILD_PID_FILE=path spawn `sleep 300` and write its pid to path
 //	RG_CRASH_AFTER_MS=n    exit 4 after n milliseconds
+//	RG_CRASH_ONCE=path     with RG_CRASH_AFTER_MS, only crash if path does not exist, creating it
 //	RG_TOOLS=a,b           extra no-op tool names beyond "echo"
 func Main() {
 	if os.Getenv("RG_FAIL_START") != "" {
@@ -34,7 +35,7 @@ func Main() {
 		}
 		os.WriteFile(f, []byte(strconv.Itoa(child.Process.Pid)), 0o644)
 	}
-	if ms := os.Getenv("RG_CRASH_AFTER_MS"); ms != "" {
+	if ms := os.Getenv("RG_CRASH_AFTER_MS"); ms != "" && shouldCrash() {
 		d, _ := strconv.Atoi(ms)
 		go func() { time.Sleep(time.Duration(d) * time.Millisecond); os.Exit(4) }()
 	}
@@ -52,6 +53,18 @@ func Main() {
 		os.Exit(5)
 	}
 	os.Exit(0)
+}
+
+func shouldCrash() bool {
+	marker := os.Getenv("RG_CRASH_ONCE")
+	if marker == "" {
+		return true
+	}
+	if _, err := os.Stat(marker); err == nil {
+		return false
+	}
+	os.WriteFile(marker, nil, 0o644)
+	return true
 }
 
 // Spec builds a supervisor-compatible launch of the current test binary.
