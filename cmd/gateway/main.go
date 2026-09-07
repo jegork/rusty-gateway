@@ -63,9 +63,13 @@ func run(cfgPath string, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	var resources []string
+	for _, ns := range cfg.Namespaces {
+		resources = append(resources, "/mcp/"+ns.Name)
+	}
 	authn, err := auth.New(ctx, auth.Config{
 		PublicURL: cfg.Server.PublicURL, Issuer: cfg.Auth.Issuer, Audience: cfg.Auth.Audience,
-		RequiredScope: cfg.Auth.RequiredScope, StaticToken: cfg.Auth.StaticToken, Logger: log,
+		RequiredScope: cfg.Auth.RequiredScope, StaticToken: cfg.Auth.StaticToken, Resources: resources, Logger: log,
 	})
 	if err != nil {
 		return err
@@ -116,15 +120,19 @@ func run(cfgPath string, log *slog.Logger) error {
 		defer sink.Close()
 		gw.Observe = sink.Observe
 		go audit.Retention(ctx, store, time.Duration(cfg.Audit.RetentionDays)*24*time.Hour, log)
-		mux.Handle("GET /audit", authn.Middleware()(audit.Handler(store)))
+		mux.Handle("GET /audit", authn.Middleware("")(audit.Handler(store)))
 	}
 
 	sup.Start(ctx)
 	gw.RefreshAll()
 	defer sup.Stop()
 
-	mux.Handle("/mcp/{ns}", authn.Middleware()(gw.Handler()))
+	mcpHandler := gw.Handler()
+	for _, r := range resources {
+		mux.Handle(r, authn.Middleware(r)(mcpHandler))
+	}
 	mux.Handle(auth.MetadataPath, authn.MetadataHandler())
+	mux.Handle(auth.MetadataPath+"/", authn.MetadataHandler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		statuses := sup.Statuses()
 		code := http.StatusOK

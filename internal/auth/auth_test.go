@@ -74,9 +74,10 @@ func protected(t *testing.T, cfg Config) *httptest.Server {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/mcp/", a.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/mcp/x", a.Middleware("/mcp/x")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(ClientID(r.Context())))
 	})))
+	mux.Handle(MetadataPath+"/", a.MetadataHandler())
 	mux.Handle(MetadataPath, a.MetadataHandler())
 	s := httptest.NewServer(mux)
 	t.Cleanup(s.Close)
@@ -107,13 +108,13 @@ func get(t *testing.T, url, bearer string) (int, string, http.Header) {
 }
 
 func TestStaticToken(t *testing.T) {
-	s := protected(t, Config{PublicURL: "https://gw.example", StaticToken: "s3cret", RequiredScope: "mcp:use"})
+	s := protected(t, Config{PublicURL: "https://gw.example", StaticToken: "s3cret", RequiredScope: "mcp:use", Resources: []string{"/mcp/x"}})
 
 	code, _, hdr := get(t, s.URL+"/mcp/x", "")
 	if code != 401 {
 		t.Fatalf("no token: %d", code)
 	}
-	if want := `resource_metadata="https://gw.example` + MetadataPath + `"`; !strings.Contains(hdr.Get("WWW-Authenticate"), want) {
+	if want := `resource_metadata="https://gw.example` + MetadataPath + `/mcp/x"`; !strings.Contains(hdr.Get("WWW-Authenticate"), want) {
 		t.Errorf("WWW-Authenticate = %q", hdr.Get("WWW-Authenticate"))
 	}
 	for _, bad := range []string{"s3cre", "S3CRET", "s3cretx"} {
@@ -130,6 +131,13 @@ func TestStaticToken(t *testing.T) {
 	if code != 200 || !strings.Contains(body, `"resource":"https://gw.example"`) || strings.Contains(body, "authorization_servers") {
 		t.Errorf("metadata: %d %s", code, body)
 	}
+	code, body, _ = get(t, s.URL+MetadataPath+"/mcp/x", "")
+	if code != 200 || !strings.Contains(body, `"resource":"https://gw.example/mcp/x"`) {
+		t.Errorf("per-resource metadata: %d %s", code, body)
+	}
+	if code, _, _ := get(t, s.URL+MetadataPath+"/mcp/nope", ""); code != 404 {
+		t.Errorf("unknown resource metadata: %d", code)
+	}
 }
 
 func TestOIDCToken(t *testing.T) {
@@ -137,7 +145,7 @@ func TestOIDCToken(t *testing.T) {
 	other, _ := rsa.GenerateKey(rand.Reader, 2048)
 	s := protected(t, Config{
 		PublicURL: "https://gw.example", Issuer: idp.srv.URL, Audience: "mcp-gateway",
-		RequiredScope: "mcp:use", StaticToken: "s3cret",
+		RequiredScope: "mcp:use", StaticToken: "s3cret", Resources: []string{"/mcp/x"},
 	})
 
 	good := jwt.MapClaims{"aud": "mcp-gateway", "scope": "openid mcp:use", "sub": "jegor", "client_id": "claude-code"}
@@ -149,6 +157,10 @@ func TestOIDCToken(t *testing.T) {
 	}{
 		{"valid", good, idp.key, 200},
 		{"aud list", jwt.MapClaims{"aud": []string{"x", "mcp-gateway"}, "scope": "mcp:use"}, idp.key, 200},
+		{"aud public url", jwt.MapClaims{"aud": "https://gw.example", "scope": "mcp:use"}, idp.key, 200},
+		{"aud resource url", jwt.MapClaims{"aud": "https://gw.example/mcp/x", "scope": "mcp:use"}, idp.key, 200},
+		{"aud other resource", jwt.MapClaims{"aud": "https://gw.example/mcp/other", "scope": "mcp:use"}, idp.key, 401},
+		{"no aud", jwt.MapClaims{"scope": "mcp:use"}, idp.key, 401},
 		{"wrong signer", good, other, 401},
 		{"wrong aud", jwt.MapClaims{"aud": "other", "scope": "mcp:use"}, idp.key, 401},
 		{"wrong iss", jwt.MapClaims{"iss": "https://evil", "aud": "mcp-gateway", "scope": "mcp:use"}, idp.key, 401},

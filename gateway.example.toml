@@ -5,8 +5,10 @@ public_url = "https://gw.example"
 [auth]
 # OIDC issuer (Authelia, Keycloak, ...). Tokens must be JWTs with aud = audience.
 issuer           = "https://auth.example"
-audience         = "https://gw.example"
 required_scope   = "mcp:use"
+# tokens must carry aud = public_url or public_url + "/mcp/{namespace}";
+# audience adds one more accepted value if your IdP uses a fixed name
+# audience       = "mcp-gateway"
 # optional: env var holding a static bearer token for scripts and bootstrapping
 static_token_env = "GATEWAY_STATIC_TOKEN"
 

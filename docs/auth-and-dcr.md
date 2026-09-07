@@ -29,7 +29,9 @@ Cost: one Authelia client block per MCP client, and one `--client-id` flag per C
 
 ## Authelia client configuration
 
-Every client must use the JWT access token profile so the gateway can validate with JWKS. The `audience` must equal `auth.audience` in the gateway config, and the gateway's `public_url` should be the same value so RFC 8707 `resource` values match.
+Every client must use the JWT access token profile so the gateway can validate with JWKS.
+
+**Audience is per namespace.** MCP clients send `resource=<the endpoint URL they connect to>` (RFC 8707), so Claude Code asking for `/mcp/personal` sends `resource=https://gw.example/mcp/personal`. Authelia only issues a token for a resource listed in the client's `audience`, so list every namespace URL there. The gateway accepts a token whose `aud` is any of its namespace URLs or its `public_url`, and serves per-namespace metadata at `/.well-known/oauth-protected-resource/mcp/{ns}` so clients discover the right resource value.
 
 The provider itself needs a signing key the first time OIDC is enabled. Generate one with `authelia crypto pair rsa generate --bits 4096` and a random `hmac_secret`; both can also come from files via `AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE` and `AUTHELIA_IDENTITY_PROVIDERS_OIDC_JWKS_0_KEY_FILE`.
 
@@ -53,7 +55,7 @@ identity_providers:
         redirect_uris:
           - http://localhost:3000/callback   # match --callback-port
         scopes: [openid, offline_access, mcp:use]
-        audience: [https://gw.example]
+        audience: [https://gw.example/mcp/personal, https://gw.example/mcp/ops]
         grant_types: [authorization_code, refresh_token]
         response_types: [code]
         token_endpoint_auth_method: none
@@ -68,7 +70,7 @@ identity_providers:
           - https://claude.ai/api/mcp/auth_callback
           - https://claude.com/api/mcp/auth_callback
         scopes: [openid, offline_access, mcp:use]
-        audience: [https://gw.example]
+        audience: [https://gw.example/mcp/personal, https://gw.example/mcp/ops]
         grant_types: [authorization_code, refresh_token]
         response_types: [code]
         token_endpoint_auth_method: client_secret_post
@@ -82,7 +84,7 @@ identity_providers:
         redirect_uris:
           - https://chatgpt.com/connector_platform_oauth_redirect
         scopes: [openid, offline_access, mcp:use]
-        audience: [https://gw.example]
+        audience: [https://gw.example/mcp/personal, https://gw.example/mcp/ops]
         grant_types: [authorization_code, refresh_token]
         response_types: [code]
         token_endpoint_auth_method: client_secret_post
@@ -96,7 +98,7 @@ identity_providers:
         redirect_uris:
           - http://localhost:8432/oauth/callback   # match oauth.callback_url below
         scopes: [openid, offline_access, mcp:use]
-        audience: [https://gw.example]
+        audience: [https://gw.example/mcp/personal, https://gw.example/mcp/ops]
         grant_types: [authorization_code, refresh_token]
         response_types: [code]
         token_endpoint_auth_method: none
@@ -108,12 +110,11 @@ identity_providers:
         description: Use the MCP gateway
 ```
 
-Gateway side:
+Gateway side. `audience` is optional and only adds one more accepted `aud` value on top of the namespace URLs:
 
 ```toml
 [auth]
 issuer         = "https://auth.example"
-audience       = "https://gw.example"
 required_scope = "mcp:use"
 ```
 
@@ -128,7 +129,7 @@ Codex (`~/.codex/config.toml`). Codex binds a random callback port by default, s
 ```toml
 [mcp_servers.personal]
 url = "https://gw.example/mcp/personal"
-oauth_resource = "https://gw.example"
+oauth_resource = "https://gw.example/mcp/personal"
 
 [mcp_servers.personal.oauth]
 client_id = "codex"

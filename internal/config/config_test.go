@@ -76,7 +76,6 @@ func TestParseErrors(t *testing.T) {
 		{"bad duration", minimal(cmd) + "\n[limits]\ncall_timeout = \"soon\"\n", ok, "invalid duration"},
 		{"bad stderr level", minimal(cmd) + "\nstderr_level = \"loud\"\n", ok, "stderr_level must be"},
 		{"negative limit", minimal(cmd) + "\n[limits]\nmax_concurrent = -1\n", ok, "not be negative"},
-		{"issuer without audience", strings.Replace(minimal(cmd), `static_token_env = "TOK"`, `issuer = "https://idp"`, 1), ok, "auth.audience is required"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

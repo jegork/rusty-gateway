@@ -23,7 +23,7 @@ expanded from the host environment at load and missing variables are an error.
 Endpoints:
 
 - `POST|GET|DELETE /mcp/{namespace}` streamable HTTP MCP; tools are named `{server}__{tool}`
-- `GET /.well-known/oauth-protected-resource` RFC 9728 metadata
+- `GET /.well-known/oauth-protected-resource[/mcp/{namespace}]` RFC 9728 metadata, per namespace
 - `GET /healthz` upstream states, pids and tool counts; 503 if any upstream is failed
 - `GET /audit?namespace=&server=&tool=&status=&since=24h&limit=100` recent tool calls (bearer required)
 
@@ -71,6 +71,9 @@ limits and audit as local ones.
 
 The gateway is a resource server only. It validates JWT access tokens (`iss`,
 `aud`, `exp`, signature via JWKS, `scope`) and never issues or stores tokens.
+Each namespace is its own protected resource: clients send
+`resource=https://gw.example/mcp/{namespace}` and the IdP must allow that
+value as an audience for the client.
 A static bearer token from `auth.static_token_env` is accepted alongside for
 scripts. Client registration is static in the IdP; see
 [docs/auth-and-dcr.md](docs/auth-and-dcr.md) for why and for Authelia config.

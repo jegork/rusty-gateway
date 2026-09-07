@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,30 +21,43 @@ import (
 const MetadataPath = "/.well-known/oauth-protected-resource"
 
 type Config struct {
-	PublicURL     string
-	Issuer        string
+	PublicURL string
+	Issuer    string
+	// Audience is an extra accepted aud value; the public URL and every
+	// resource URL are always accepted.
 	Audience      string
 	RequiredScope string
 	StaticToken   string
-	Logger        *slog.Logger
+	// Resources are the protected endpoints, e.g. "/mcp/personal". Each gets
+	// its own RFC 9728 metadata document and is an accepted aud value, so
+	// clients can send resource=<endpoint url> as the MCP spec requires.
+	Resources []string
+	Logger    *slog.Logger
 }
 
 type Authenticator struct {
 	cfg      Config
 	verifier *oidc.IDTokenVerifier
+	audience []string
 }
 
 func New(ctx context.Context, cfg Config) (*Authenticator, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	a := &Authenticator{cfg: cfg}
+	a := &Authenticator{cfg: cfg, audience: []string{cfg.PublicURL}}
+	if cfg.Audience != "" {
+		a.audience = append(a.audience, cfg.Audience)
+	}
+	for _, r := range cfg.Resources {
+		a.audience = append(a.audience, cfg.PublicURL+r)
+	}
 	if cfg.Issuer != "" {
 		provider, err := oidc.NewProvider(ctx, cfg.Issuer)
 		if err != nil {
 			return nil, fmt.Errorf("oidc discovery for %s: %w", cfg.Issuer, err)
 		}
-		a.verifier = provider.Verifier(&oidc.Config{ClientID: cfg.Audience})
+		a.verifier = provider.Verifier(&oidc.Config{SkipClientIDCheck: true})
 	}
 	if a.verifier == nil && cfg.StaticToken == "" {
 		return nil, errors.New("no auth method configured")
@@ -51,10 +65,11 @@ func New(ctx context.Context, cfg Config) (*Authenticator, error) {
 	return a, nil
 }
 
-// Middleware wraps h with bearer-token enforcement.
-func (a *Authenticator) Middleware() func(http.Handler) http.Handler {
+// Middleware wraps h with bearer-token enforcement for the given resource
+// path, so the 401 challenge points at that resource's metadata.
+func (a *Authenticator) Middleware(resource string) func(http.Handler) http.Handler {
 	opts := &sdkauth.RequireBearerTokenOptions{
-		ResourceMetadataURL: a.cfg.PublicURL + MetadataPath,
+		ResourceMetadataURL: a.cfg.PublicURL + MetadataPath + resource,
 	}
 	if a.cfg.RequiredScope != "" {
 		opts.Scopes = []string{a.cfg.RequiredScope}
@@ -62,12 +77,22 @@ func (a *Authenticator) Middleware() func(http.Handler) http.Handler {
 	return sdkauth.RequireBearerToken(a.verify, opts)
 }
 
-// MetadataHandler serves RFC 9728 protected resource metadata.
+// MetadataHandler serves RFC 9728 metadata at MetadataPath (for the
+// gateway as a whole) and MetadataPath+resource for each resource.
 func (a *Authenticator) MetadataHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle(MetadataPath, a.metadata(""))
+	for _, r := range a.cfg.Resources {
+		mux.Handle(MetadataPath+r, a.metadata(r))
+	}
+	return mux
+}
+
+func (a *Authenticator) metadata(resource string) http.Handler {
 	md := &oauthex.ProtectedResourceMetadata{
-		Resource:               a.cfg.PublicURL,
+		Resource:               a.cfg.PublicURL + resource,
 		BearerMethodsSupported: []string{"header"},
-		ResourceName:           "rusty-gateway",
+		ResourceName:           "rusty-gateway" + resource,
 	}
 	if a.cfg.Issuer != "" {
 		md.AuthorizationServers = []string{a.cfg.Issuer}
@@ -96,6 +121,10 @@ func (a *Authenticator) verify(ctx context.Context, token string, r *http.Reques
 	if err != nil {
 		a.cfg.Logger.DebugContext(ctx, "token rejected", "method", "oidc", "err", err)
 		return nil, fmt.Errorf("%w: %v", sdkauth.ErrInvalidToken, err)
+	}
+	if !slices.ContainsFunc(idt.Audience, func(aud string) bool { return slices.Contains(a.audience, aud) }) {
+		a.cfg.Logger.DebugContext(ctx, "token rejected", "method", "oidc", "err", "audience mismatch", "aud", idt.Audience, "accepted", a.audience)
+		return nil, fmt.Errorf("%w: audience %v not accepted", sdkauth.ErrInvalidToken, idt.Audience)
 	}
 	var claims struct {
 		Scope    string `json:"scope"`

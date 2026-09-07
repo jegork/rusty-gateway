@@ -199,9 +199,6 @@ func (c *Config) validate() error {
 	if c.Auth.Issuer == "" && c.Auth.StaticTokenEnv == "" {
 		errs = append(errs, errors.New("auth: set auth.issuer, auth.static_token_env, or both"))
 	}
-	if c.Auth.Issuer != "" && c.Auth.Audience == "" {
-		errs = append(errs, errors.New("auth.audience is required when auth.issuer is set"))
-	}
 	if c.Auth.StaticTokenEnv != "" && c.Auth.StaticToken == "" {
 		errs = append(errs, fmt.Errorf("auth.static_token_env: %s is unset or empty", c.Auth.StaticTokenEnv))
 	}
