@@ -83,7 +83,7 @@ identity_providers:
         authorization_policy: two_factor
         redirect_uris:
           - https://chatgpt.com/connector_platform_oauth_redirect
-        scopes: [openid, offline_access, mcp:use]
+        scopes: [openid, profile, email, offline_access, mcp:use]   # chatgpt requests profile and email
         audience: [https://gw.example/mcp/personal, https://gw.example/mcp/ops]
         grant_types: [authorization_code, refresh_token]
         response_types: [code]
