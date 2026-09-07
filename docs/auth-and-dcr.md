@@ -63,6 +63,20 @@ identity_providers:
         require_pkce: true
         pkce_challenge_method: S256
         access_token_signed_response_alg: RS256
+      - client_id: codex
+        client_name: Codex CLI
+        public: true
+        authorization_policy: two_factor
+        redirect_uris:
+          - http://localhost:8432/oauth/callback   # match oauth.callback_url below
+        scopes: [openid, offline_access, mcp:use]
+        audience: [https://gw.example]
+        grant_types: [authorization_code, refresh_token]
+        response_types: [code]
+        token_endpoint_auth_method: none
+        require_pkce: true
+        pkce_challenge_method: S256
+        access_token_signed_response_alg: RS256
     scopes:
       mcp:use:
         description: Use the MCP gateway
@@ -82,6 +96,21 @@ Claude Code:
 ```sh
 claude mcp add --transport http --client-id claude-code --callback-port 3000 personal https://gw.example/mcp/personal
 ```
+
+Codex (`~/.codex/config.toml`). Codex binds a random callback port by default, so the fixed port and URL are what keep the Authelia redirect URI stable:
+
+```toml
+[mcp_servers.personal]
+url = "https://gw.example/mcp/personal"
+oauth_resource = "https://gw.example"
+
+[mcp_servers.personal.oauth]
+client_id = "codex"
+callback_port = 8432
+callback_url = "http://localhost:8432/oauth/callback"
+```
+
+Then `codex mcp login personal`. Codex prefers CIMD and only falls back to DCR when the server does not advertise it, so once Authelia ships CIMD the pre-registered client block becomes optional.
 
 ## If Authelia turns out to be unusable: what building DCR would take
 
