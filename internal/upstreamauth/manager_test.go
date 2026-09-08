@@ -44,7 +44,7 @@ func newFakeAS(t *testing.T) *fakeAS {
 		func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "found"}}}, nil
 		})
-	mcpH := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpSrv }, nil)
+	mcpH := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpSrv }, &mcp.StreamableHTTPOptions{Stateless: true})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, r *http.Request) {
@@ -172,6 +172,7 @@ func newHarness(t *testing.T, as *fakeAS, storePath string) *harness {
 		PingInterval: 100 * time.Millisecond, StartTimeout: 5 * time.Second, BackoffMin: 20 * time.Millisecond,
 		BackoffMax: 50 * time.Millisecond, StableAfter: time.Hour, MaxFailures: 3, OAuth: h.mgr, Logger: log,
 	})
+	h.mgr.OnInvalidate = h.sup.Reconnect
 	return h
 }
 

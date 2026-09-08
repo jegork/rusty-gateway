@@ -50,6 +50,9 @@ type Manager struct {
 	store     *Store
 	log       *slog.Logger
 	http      *http.Client
+	// OnInvalidate is called when stored credentials are found to be dead,
+	// so the supervisor can drop the session and show needs_login.
+	OnInvalidate func(id string)
 
 	mu      sync.Mutex
 	entries map[string]*entry
@@ -167,6 +170,9 @@ func (m *Manager) invalidate(e *entry) {
 		m.log.Error("deleting upstream credentials", "upstream", e.up.ID, "err", err)
 	}
 	m.log.Warn("upstream credentials rejected, login required again", "upstream", e.up.ID)
+	if m.OnInvalidate != nil {
+		go m.OnInvalidate(e.up.ID)
+	}
 }
 
 // persisting wraps a token source so refreshed tokens are written back and

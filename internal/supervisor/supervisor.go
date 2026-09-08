@@ -282,6 +282,23 @@ func (u *Upstream) CallTool(ctx context.Context, params *mcp.CallToolParams) (*m
 	return sess.CallTool(ctx, params)
 }
 
+// Reconnect drops the current session so the run loop rebuilds it; used
+// when credentials were found to be invalid outside the health check.
+func (u *Upstream) Reconnect() {
+	u.mu.RLock()
+	sess := u.session
+	u.mu.RUnlock()
+	if sess != nil {
+		_ = sess.Close()
+	}
+}
+
+func (s *Supervisor) Reconnect(id string) {
+	if u, ok := s.upstreams[id]; ok {
+		u.Reconnect()
+	}
+}
+
 func (u *Upstream) setState(st State, err error) {
 	u.mu.Lock()
 	u.state, u.lastErr = st, err
@@ -409,6 +426,13 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 	u.mu.RLock()
 	skipPing := u.spec.NoPing || u.pingBroken
 	u.mu.RUnlock()
+	// on the stateless 2026-07-28 protocol the sdk's ping is answered with
+	// 404 by every server built on it (the sdk's own included), and a 404
+	// makes the client drop the session; liveness of remote servers comes
+	// from request failures instead
+	if res := sess.InitializeResult(); u.spec.Remote() && res != nil && res.ProtocolVersion >= "2026-07-28" {
+		skipPing = true
+	}
 	if skipPing {
 		ticker.Stop()
 	}
