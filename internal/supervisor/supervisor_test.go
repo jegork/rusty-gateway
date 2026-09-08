@@ -231,14 +231,26 @@ func (l lockedWriter) Write(p []byte) (int, error) {
 	return l.w.Write(p)
 }
 
-func TestPingCarriesProtocolEnvelope(t *testing.T) {
-	s := New([]Spec{fakeSpec(t, "ns/strict", map[string]string{"RG_STRICT_META": "1"})}, fastOpts())
+// ping is not part of the 2026-07-28 schema; a server on that protocol must
+// never see one from us
+func TestNoPingOnNewProtocol(t *testing.T) {
+	s := New([]Spec{fakeSpec(t, "ns/modern", map[string]string{"RG_REJECT_PING": "1"})}, fastOpts())
 	s.Start(context.Background())
 	defer s.Stop()
 	pid := s.LivePIDs()[0]
+	u, _ := s.Get("ns/modern")
+	u.mu.RLock()
+	negotiated := u.session.InitializeResult().ProtocolVersion
+	u.mu.RUnlock()
+	if negotiated < "2026-07-28" {
+		t.Fatalf("stdio fake negotiated %s; expected the newest protocol", negotiated)
+	}
 	time.Sleep(700 * time.Millisecond)
 	st := s.Statuses()[0]
-	if st.State != "ready" || st.Restarts != 0 || st.PID != pid {
-		t.Errorf("strict upstream restarted because of ping: %+v", st)
+	u.mu.RLock()
+	broken := u.pingBroken
+	u.mu.RUnlock()
+	if st.State != "ready" || st.Restarts != 0 || st.PID != pid || broken {
+		t.Errorf("a ping was sent on the new protocol: %+v pingBroken=%v", st, broken)
 	}
 }

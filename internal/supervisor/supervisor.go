@@ -426,11 +426,9 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 	u.mu.RLock()
 	skipPing := u.spec.NoPing || u.pingBroken
 	u.mu.RUnlock()
-	// on the stateless 2026-07-28 protocol the sdk's ping is answered with
-	// 404 by every server built on it (the sdk's own included), and a 404
-	// makes the client drop the session; liveness of remote servers comes
-	// from request failures instead
-	if res := sess.InitializeResult(); u.spec.Remote() && res != nil && res.ProtocolVersion >= "2026-07-28" {
+	// ping was removed from the protocol in 2026-07-28; on those sessions
+	// liveness comes from process exit and request failures
+	if res := sess.InitializeResult(); res != nil && res.ProtocolVersion >= "2026-07-28" {
 		skipPing = true
 	}
 	if skipPing {
@@ -448,7 +446,7 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 			return fmt.Errorf("process exited: %w", errors.Join(err, errors.New("unexpected exit")))
 		case <-ticker.C:
 			pctx, cancel := context.WithTimeout(ctx, opts.PingInterval)
-			err := sess.Ping(pctx, pingParams(sess))
+			err := sess.Ping(pctx, nil)
 			cancel()
 			switch {
 			case err == nil:
@@ -472,8 +470,8 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 	}
 }
 
-// pingUnsupported recognises the two ways servers say "no such method":
-// a json-rpc method-not-found, or notion's http 404 which the sdk reports
+// pingUnsupported recognises the two ways pre-2026 servers say "no such
+// method": a json-rpc method-not-found, or an http 404 which the sdk reports
 // as a missing session. Anything else (auth, network) is a real failure.
 func pingUnsupported(err error) bool {
 	var je *jsonrpc.Error
@@ -485,25 +483,9 @@ func pingUnsupported(err error) bool {
 
 var (
 	clientImpl = &mcp.Implementation{Name: "rusty-gateway", Version: "dev"}
-	// the gateway offers no roots, sampling or elicitation to upstreams;
-	// declared explicitly so the ping envelope below matches initialize
+	// the gateway offers no roots, sampling or elicitation to upstreams
 	clientCaps = &mcp.ClientCapabilities{}
 )
-
-// pingParams carries the 2026-07-28 per-request _meta envelope. go-sdk
-// v1.7.0 injects it for every client method except Ping, and servers on the
-// new protocol reject a bare ping.
-func pingParams(sess *mcp.ClientSession) *mcp.PingParams {
-	p := &mcp.PingParams{}
-	if res := sess.InitializeResult(); res != nil && res.ProtocolVersion >= "2026-07-28" {
-		p.Meta = mcp.Meta{
-			mcp.MetaKeyProtocolVersion:    res.ProtocolVersion,
-			mcp.MetaKeyClientInfo:         clientImpl,
-			mcp.MetaKeyClientCapabilities: clientCaps,
-		}
-	}
-	return p
-}
 
 // awaitOAuth parks the upstream in NeedsLogin until the provider has
 // credentials; waiting is not a failure and burns no restart budget.
