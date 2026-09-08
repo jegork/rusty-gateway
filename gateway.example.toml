@@ -73,3 +73,4 @@ call_timeout   = "120s" # overrides limits.call_timeout
 [servers.notion]
 url   = "https://mcp.notion.com/mcp"
 oauth = true
+ping  = false   # notion answers ping with 404; the gateway would learn this after one reconnect anyway

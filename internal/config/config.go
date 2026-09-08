@@ -115,7 +115,11 @@ type Server_ struct {
 	// StderrLevel is where the child's stderr goes: debug (default), info,
 	// warn, error, or discard.
 	StderrLevel string `toml:"stderr_level"`
+	// Ping can be set to false for servers that do not implement ping.
+	Ping *bool `toml:"ping"`
 }
+
+func (s Server_) PingEnabled() bool { return s.Ping == nil || *s.Ping }
 
 var stderrLevels = map[string]bool{"": true, "debug": true, "info": true, "warn": true, "error": true, "discard": true}
 

@@ -16,11 +16,13 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/shirou/gopsutil/v4/process"
 )
@@ -64,6 +66,8 @@ type Spec struct {
 	// OAuth marks a remote upstream whose bearer tokens come from
 	// Options.OAuth rather than static headers.
 	OAuth bool
+	// NoPing disables health pings for servers known not to implement them.
+	NoPing bool
 	// StderrLevel is the slog level child stderr lines are logged at.
 	// nil means debug; StderrDiscard drops them.
 	StderrLevel *slog.Level
@@ -147,6 +151,9 @@ type Upstream struct {
 	restarts int
 	failures int
 	pid      int
+	// pingBroken is learned when a server rejects the first ping of a
+	// session; later sessions then skip pings entirely
+	pingBroken bool
 
 	done chan struct{}
 }
@@ -399,6 +406,12 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 	go func() { exited <- sess.Wait() }()
 	ticker := time.NewTicker(opts.PingInterval)
 	defer ticker.Stop()
+	u.mu.RLock()
+	skipPing := u.spec.NoPing || u.pingBroken
+	u.mu.RUnlock()
+	if skipPing {
+		ticker.Stop()
+	}
 	pinged := false // a ping has succeeded on this session
 	for {
 		select {
@@ -417,11 +430,15 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 			case err == nil:
 				pinged = true
 			case ctx.Err() != nil:
-			case !pinged && !isTimeout(err):
+			case !pinged && pingUnsupported(err):
 				// a server that rejects the very first ping does not implement
-				// it (notion answers with http 404, others with method not
-				// found); liveness then comes from real requests and exit
-				log.Info("upstream does not support ping, health checks disabled for this session", "err", err)
+				// it (notion answers http 404, others method-not-found). the sdk
+				// may already have torn the session down on a 404, so remember
+				// it for the next session rather than only for this one
+				u.mu.Lock()
+				u.pingBroken = true
+				u.mu.Unlock()
+				log.Warn("upstream rejects ping, disabling health pings for it; set ping = false in config to skip the first failure", "err", err)
 				ticker.Stop()
 			default:
 				u.shutdown(sess, pid)
@@ -429,6 +446,17 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 			}
 		}
 	}
+}
+
+// pingUnsupported recognises the two ways servers say "no such method":
+// a json-rpc method-not-found, or notion's http 404 which the sdk reports
+// as a missing session. Anything else (auth, network) is a real failure.
+func pingUnsupported(err error) bool {
+	var je *jsonrpc.Error
+	if errors.As(err, &je) && je.Code == jsonrpc.CodeMethodNotFound {
+		return true
+	}
+	return strings.Contains(err.Error(), "session not found")
 }
 
 var (
@@ -581,10 +609,6 @@ func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		r.Header.Set(k, v)
 	}
 	return http.DefaultTransport.RoundTrip(r)
-}
-
-func isTimeout(err error) bool {
-	return errors.Is(err, context.DeadlineExceeded)
 }
 
 func killGroup(pid int) {

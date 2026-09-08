@@ -94,7 +94,7 @@ func run(cfgPath string, log *slog.Logger) error {
 			id := gateway.UpstreamID(ns.Name, name)
 			specs = append(specs, supervisor.Spec{
 				ID: id, Command: srv.Command, Args: srv.Args, Env: srv.Env, URL: srv.URL, Headers: srv.Headers,
-				OAuth: srv.OAuth, StderrLevel: stderrLevel(srv.StderrLevel),
+				OAuth: srv.OAuth, NoPing: !srv.PingEnabled(), StderrLevel: stderrLevel(srv.StderrLevel),
 			})
 			if srv.OAuth {
 				up := upstreamauth.Upstream{ID: id, URL: srv.URL}
