@@ -111,7 +111,8 @@ func TestRestartsAfterCrashWithNewPid(t *testing.T) {
 	changes := make(chan string, 64)
 	opts := fastOpts()
 	opts.OnChange = func(id string) { changes <- id }
-	s := New([]Spec{fakeSpec(t, "ns/crashy", map[string]string{"RG_CRASH_AFTER_MS": "150", "RG_CRASH_ONCE": t.TempDir() + "/crashed"})}, opts)
+	// long enough that the first pid is observable even under a loaded ci box
+	s := New([]Spec{fakeSpec(t, "ns/crashy", map[string]string{"RG_CRASH_AFTER_MS": "500", "RG_CRASH_ONCE": t.TempDir() + "/crashed"})}, opts)
 	s.Start(context.Background())
 	defer s.Stop()
 
