@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -21,6 +22,13 @@ func remoteServer(t *testing.T) *httptest.Server {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Api-Key") != "k1" {
 			http.Error(w, "nope", http.StatusUnauthorized)
+			return
+		}
+		// like notion: ping is answered with an http 404 carrying a json-rpc error
+		if r.Header.Get("Mcp-Method") == "ping" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}`))
 			return
 		}
 		h.ServeHTTP(w, r)
@@ -49,6 +57,11 @@ func TestRemoteUpstream(t *testing.T) {
 	res, err := u.CallTool(context.Background(), &mcp.CallToolParams{Name: "ping"})
 	if err != nil || res.Content[0].(*mcp.TextContent).Text != "pong" {
 		t.Fatalf("%v %+v", err, res)
+	}
+	// several ping intervals must pass without the 404 ping causing a restart
+	time.Sleep(500 * time.Millisecond)
+	if st := s.Statuses()[0]; st.State != "ready" || st.Restarts != 0 {
+		t.Errorf("remote upstream restarted on unsupported ping: %+v", st)
 	}
 	waitFor(t, "bad key upstream to fail", func() bool { return s.Statuses()[1].State == "failed" })
 	if e := s.Statuses()[1].Error; e == "" {

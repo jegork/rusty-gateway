@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
-	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/shirou/gopsutil/v4/process"
 )
@@ -400,6 +399,7 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 	go func() { exited <- sess.Wait() }()
 	ticker := time.NewTicker(opts.PingInterval)
 	defer ticker.Stop()
+	pinged := false // a ping has succeeded on this session
 	for {
 		select {
 		case <-ctx.Done():
@@ -413,7 +413,17 @@ func (u *Upstream) runOnce(ctx context.Context, log *slog.Logger, onReady func()
 			pctx, cancel := context.WithTimeout(ctx, opts.PingInterval)
 			err := sess.Ping(pctx, pingParams(sess))
 			cancel()
-			if err != nil && ctx.Err() == nil && !isMethodNotFound(err) {
+			switch {
+			case err == nil:
+				pinged = true
+			case ctx.Err() != nil:
+			case !pinged && !isTimeout(err):
+				// a server that rejects the very first ping does not implement
+				// it (notion answers with http 404, others with method not
+				// found); liveness then comes from real requests and exit
+				log.Info("upstream does not support ping, health checks disabled for this session", "err", err)
+				ticker.Stop()
+			default:
 				u.shutdown(sess, pid)
 				return fmt.Errorf("ping: %w", err)
 			}
@@ -573,11 +583,8 @@ func (h headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
-// some servers never implement ping; a method-not-found reply still proves
-// the process is alive and answering
-func isMethodNotFound(err error) bool {
-	var je *jsonrpc.Error
-	return errors.As(err, &je) && je.Code == jsonrpc.CodeMethodNotFound
+func isTimeout(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 func killGroup(pid int) {
