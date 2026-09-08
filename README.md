@@ -3,9 +3,9 @@
 Single-user MCP aggregator in Go. A personal project: single-user by design,
 no multi-tenancy, no support promised. Issues and PRs are welcome but may sit.
 
- One long-lived child process per configured
-stdio MCP server, exposed over namespaced streamable HTTP endpoints, protected
-by OAuth bearer tokens validated against an external IdP.
+One long-lived child process per configured stdio MCP server, exposed over
+namespaced streamable HTTP endpoints, protected by OAuth bearer tokens
+validated against an external IdP.
 
 ```
 Claude / Claude Code / Inspector  --bearer-->  /mcp/{namespace}  -->  supervised stdio children
