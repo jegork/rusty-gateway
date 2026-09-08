@@ -1,0 +1,26 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rusty-gateway · {{.Title}}</title>
+<link rel="stylesheet" href="/ui/static/style.css">
+<script type="module" src="/ui/static/datastar.js"></script>
+</head>
+<body>
+<header>
+  <nav>
+    <a href="/ui/" class="brand">rusty-gateway</a>
+    <a href="/ui/" {{if eq .Page "overview"}}class="active"{{end}}>Overview</a>
+    <a href="/ui/tools" {{if eq .Page "tools"}}class="active"{{end}}>Tools</a>
+    <a href="/ui/audit" {{if eq .Page "audit"}}class="active"{{end}}>Audit</a>
+    <span class="spacer"></span>
+    <span class="muted">{{.Version}}</span>
+    <form method="post" action="/ui/logout"><button class="link">log out</button></form>
+  </nav>
+</header>
+<main>
+{{template "content" .}}
+</main>
+</body>
+</html>{{end}}

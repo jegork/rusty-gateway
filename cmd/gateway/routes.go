@@ -9,13 +9,17 @@ import (
 	"github.com/jegork/rusty-gateway/internal/config"
 	"github.com/jegork/rusty-gateway/internal/gateway"
 	"github.com/jegork/rusty-gateway/internal/supervisor"
+	"github.com/jegork/rusty-gateway/internal/ui"
 	"github.com/jegork/rusty-gateway/internal/upstreamauth"
 )
 
 // newMux wires every HTTP route; kept separate from run so the wiring itself
 // is covered by tests.
-func newMux(cfg *config.Config, authn *auth.Authenticator, gw *gateway.Gateway, sup *supervisor.Supervisor, store *audit.Store, ua *upstreamauth.Manager) *http.ServeMux {
+func newMux(cfg *config.Config, authn *auth.Authenticator, gw *gateway.Gateway, sup *supervisor.Supervisor, store *audit.Store, ua *upstreamauth.Manager, dash *ui.UI) *http.ServeMux {
 	mux := http.NewServeMux()
+	if dash != nil {
+		mux.Handle("/ui/", dash.Handler())
+	}
 	if ua != nil {
 		mux.Handle("GET "+upstreamauth.CallbackPath, ua.CallbackHandler())
 		mux.Handle("GET "+upstreamauth.ClientMetadataPath, ua.ClientMetadataHandler())

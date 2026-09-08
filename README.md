@@ -42,6 +42,16 @@ Rows older than `audit.retention_days` are pruned daily.
 ./gateway audit tail -config gateway.toml -n 50 -f
 ```
 
+## Dashboard
+
+`/ui/` is a small operator dashboard: upstream states, RSS and breakers
+updated live, pending OAuth logins as clickable links, a tool browser with
+search per namespace, and the audit log with filters. Sign in with the
+static gateway token; the session lives in a cookie for a week. It's
+server-rendered Go templates kept live with [Datastar](https://data-star.dev)
+over SSE, embedded in the binary with no build step. Disable with
+`[ui] enabled = false`.
+
 ## Tool discovery modes
 
 Each namespace picks how clients see its tools with `discovery`:

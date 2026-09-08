@@ -1,0 +1,25 @@
+{{define "content"}}
+<section data-signals="{ns: '{{.Namespace}}', q: ''}" data-init="@get('/ui/tools/list')">
+  <h1>Tools</h1>
+  <div class="row">
+    <select data-bind:ns data-on:change="@get('/ui/tools/list')">
+      {{range .Namespaces}}<option value="{{.}}">{{.}}</option>{{end}}
+    </select>
+    <input type="search" placeholder="search name, description, parameters…" data-bind:q data-on:input__debounce.250ms="@get('/ui/tools/list')">
+  </div>
+  <div id="tools"></div>
+</section>
+{{end}}
+
+{{define "tools"}}
+<div id="tools">
+  <p class="muted small">{{len .Tools}} tool{{if ne (len .Tools) 1}}s{{end}}{{if .Query}} matching “{{.Query}}”{{end}} in <code>{{.Namespace}}</code></p>
+  {{range .Tools}}
+  <details class="tool">
+    <summary><code>{{.Name}}</code> <span class="muted">{{.Title}}</span></summary>
+    <p>{{.Description}}</p>
+    <pre>{{.Schema}}</pre>
+  </details>
+  {{end}}
+</div>
+{{end}}

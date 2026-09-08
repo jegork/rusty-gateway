@@ -26,7 +26,7 @@ const (
 const objectSchema = `{"type":"object"}`
 
 // toolInfo is what list_tools and search_tools return for one tool.
-type toolInfo struct {
+type ToolInfo struct {
 	Name        string `json:"name"`
 	Server      string `json:"server"`
 	Title       string `json:"title,omitempty"`
@@ -131,8 +131,22 @@ func (g *Gateway) metaCall(ns *nsServer, server string) mcp.ToolHandler {
 	}
 }
 
-func (g *Gateway) toolInfos(ns *nsServer, server string) []toolInfo {
-	var out []toolInfo
+// Tools lists the tools of a namespace, or searches them when query is set.
+func (g *Gateway) Tools(namespace, query string, limit int) []ToolInfo {
+	g.mu.Lock()
+	ns, ok := g.servers[namespace]
+	g.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	if strings.TrimSpace(query) == "" {
+		return g.toolInfos(ns, "")
+	}
+	return g.search(ns, query, limit)
+}
+
+func (g *Gateway) toolInfos(ns *nsServer, server string) []ToolInfo {
+	var out []ToolInfo
 	for _, srv := range ns.ns.Servers {
 		if server != "" && srv != server {
 			continue
@@ -142,7 +156,7 @@ func (g *Gateway) toolInfos(ns *nsServer, server string) []toolInfo {
 			continue
 		}
 		for _, t := range u.Tools() {
-			out = append(out, toolInfo{Name: srv + Separator + t.Name, Server: srv, Title: displayTitle(t), Description: t.Description, InputSchema: t.InputSchema})
+			out = append(out, ToolInfo{Name: srv + Separator + t.Name, Server: srv, Title: displayTitle(t), Description: t.Description, InputSchema: t.InputSchema})
 		}
 	}
 	return out
@@ -150,13 +164,13 @@ func (g *Gateway) toolInfos(ns *nsServer, server string) []toolInfo {
 
 // search ranks tools by how many query tokens hit their name, title,
 // description and parameter names, name hits counting most.
-func (g *Gateway) search(ns *nsServer, query string, limit int) []toolInfo {
+func (g *Gateway) search(ns *nsServer, query string, limit int) []ToolInfo {
 	tokens := strings.Fields(strings.ToLower(query))
 	if len(tokens) == 0 {
 		return nil
 	}
 	type scored struct {
-		info  toolInfo
+		info  ToolInfo
 		score int
 	}
 	var hits []scored
@@ -191,7 +205,7 @@ func (g *Gateway) search(ns *nsServer, query string, limit int) []toolInfo {
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
-	out := make([]toolInfo, 0, len(hits))
+	out := make([]ToolInfo, 0, len(hits))
 	for _, h := range hits {
 		out = append(out, h.info)
 	}

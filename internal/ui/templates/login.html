@@ -1,0 +1,11 @@
+{{define "login"}}<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>rusty-gateway · sign in</title>
+<link rel="stylesheet" href="/ui/static/style.css"></head>
+<body class="center">
+<form method="post" action="/ui/login" class="card">
+  <h1>rusty-gateway</h1>
+  <label>Gateway token <input type="password" name="token" autofocus autocomplete="current-password"></label>
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+  <button>Sign in</button>
+</form>
+</body></html>{{end}}

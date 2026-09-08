@@ -275,6 +275,19 @@ func (g *Gateway) Handler(name string) http.Handler {
 		&mcp.StreamableHTTPOptions{Logger: g.log, SessionTimeout: 30 * time.Minute})
 }
 
+// SessionCount is the number of live client sessions across namespaces.
+func (g *Gateway) SessionCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	n := 0
+	for _, ns := range g.servers {
+		for range ns.server.Sessions() {
+			n++
+		}
+	}
+	return n
+}
+
 // Namespaces lists configured namespace names in stable order.
 func (g *Gateway) Namespaces() []string {
 	g.mu.Lock()

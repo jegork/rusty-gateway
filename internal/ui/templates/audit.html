@@ -1,0 +1,37 @@
+{{define "content"}}
+<section data-signals="{ns: '', server: '', tool: '', status: ''}" data-init="@get('/ui/audit/rows')" data-on:interval__duration.2s="@get('/ui/audit/rows')">
+  <h1>Audit log</h1>
+  <div class="row">
+    <input placeholder="namespace" data-bind:ns data-on:input__debounce.250ms="@get('/ui/audit/rows')">
+    <input placeholder="server" data-bind:server data-on:input__debounce.250ms="@get('/ui/audit/rows')">
+    <input placeholder="tool" data-bind:tool data-on:input__debounce.250ms="@get('/ui/audit/rows')">
+    <select data-bind:status data-on:change="@get('/ui/audit/rows')">
+      <option value="">any status</option>
+      <option>ok</option><option>tool_error</option><option>error</option><option>timeout</option><option>rejected</option>
+    </select>
+  </div>
+  <div id="audit"></div>
+</section>
+{{end}}
+
+{{define "audit"}}
+<div id="audit">
+<table>
+  <thead><tr><th>Time</th><th>Namespace</th><th>Server</th><th>Tool</th><th>Client</th><th>Status</th><th>ms</th><th>Size</th><th>Args</th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+  <tr>
+    <td class="nowrap">{{.Time}}</td>
+    <td>{{.Namespace}}</td><td>{{.Server}}</td><td><code>{{.Tool}}</code></td><td>{{.ClientID}}</td>
+    <td><span class="state state-{{.Status}}">{{.Status}}</span></td>
+    <td>{{.DurationMS}}</td><td>{{.ResultSize}}</td>
+    <td class="small"><details><summary>show</summary><pre>{{.ArgsJSON}}</pre>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}<pre>{{.ResultJSON}}</pre></details></td>
+  </tr>
+  {{else}}
+  <tr><td colspan="9" class="muted">no calls recorded{{if .Filtered}} for this filter{{end}}</td></tr>
+  {{end}}
+  </tbody>
+</table>
+<p class="muted small">Newest first, live. {{.Note}}</p>
+</div>
+{{end}}

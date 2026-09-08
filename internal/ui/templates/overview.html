@@ -1,0 +1,36 @@
+{{define "content"}}
+<section data-init="@get('/ui/events/overview')">
+  <h1>Upstreams</h1>
+  {{template "upstreams" .}}
+</section>
+{{end}}
+
+{{define "upstreams"}}
+<div id="upstreams">
+{{if .Logins}}
+<div class="notice">
+  <strong>Login required</strong>
+  {{range .Logins}}<div><code>{{.ID}}</code> — <a href="{{.URL}}" target="_blank" rel="noopener">open the authorization page</a></div>{{end}}
+</div>
+{{end}}
+<table>
+  <thead><tr><th>Upstream</th><th>Kind</th><th>State</th><th>PID</th><th>Tools</th><th>Restarts</th><th>RSS</th><th>Breaker</th><th>Error</th></tr></thead>
+  <tbody>
+  {{range .Upstreams}}
+  <tr>
+    <td><code>{{.ID}}</code></td>
+    <td>{{.Kind}}</td>
+    <td><span class="state state-{{.State}}">{{.State}}</span></td>
+    <td>{{if .PID}}{{.PID}}{{else}}–{{end}}</td>
+    <td>{{.Tools}}</td>
+    <td>{{.Restarts}}</td>
+    <td>{{.RSS}}</td>
+    <td><span class="state state-{{.Breaker}}">{{.Breaker}}</span></td>
+    <td class="muted small">{{.Error}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+<p class="muted small">Updated {{.Now}} · {{.Sessions}} live client session{{if ne .Sessions 1}}s{{end}}</p>
+</div>
+{{end}}

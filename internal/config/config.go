@@ -18,11 +18,19 @@ type Config struct {
 	Server     Server             `toml:"server"`
 	Auth       Auth               `toml:"auth"`
 	Audit      Audit              `toml:"audit"`
+	UI         UI                 `toml:"ui"`
 	Limits     Limits             `toml:"limits"`
 	Breaker    Breaker            `toml:"breaker"`
 	Namespaces []Namespace        `toml:"namespace"`
 	Servers    map[string]Server_ `toml:"servers"`
 }
+
+// UI serves the dashboard at /ui when enabled; sign-in uses the static token.
+type UI struct {
+	Enabled *bool `toml:"enabled"`
+}
+
+func (u UI) On() bool { return u.Enabled == nil || *u.Enabled }
 
 // Limits bounds in-flight tool calls. Zero means unlimited for the
 // concurrency fields; CallTimeout zero means no deadline.

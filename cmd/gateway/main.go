@@ -18,6 +18,7 @@ import (
 	"github.com/jegork/rusty-gateway/internal/config"
 	"github.com/jegork/rusty-gateway/internal/gateway"
 	"github.com/jegork/rusty-gateway/internal/supervisor"
+	"github.com/jegork/rusty-gateway/internal/ui"
 	"github.com/jegork/rusty-gateway/internal/upstreamauth"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
@@ -163,7 +164,23 @@ func run(cfgPath string, log *slog.Logger) error {
 		ua.AutoLogin(ctx)
 	}
 
-	mux := newMux(cfg, authn, gw, sup, store, ua)
+	var dash *ui.UI
+	switch {
+	case !cfg.UI.On():
+	case cfg.Auth.StaticToken == "":
+		log.Warn("ui disabled: set auth.static_token_env to enable sign-in")
+	default:
+		dash, err = ui.New(ui.Deps{
+			Supervisor: sup, Gateway: gw, Audit: store, OAuth: ua, Sessions: gw.SessionCount,
+			Token: cfg.Auth.StaticToken, Version: version, Logger: log,
+		})
+		if err != nil {
+			return err
+		}
+		log.Info("ui enabled", "url", cfg.Server.PublicURL+"/ui/")
+	}
+
+	mux := newMux(cfg, authn, gw, sup, store, ua, dash)
 
 	srv := &http.Server{Addr: cfg.Server.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)

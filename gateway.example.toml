@@ -13,6 +13,9 @@ required_scope   = "mcp:use"
 # optional: env var holding a static bearer token for scripts and bootstrapping
 static_token_env = "GATEWAY_STATIC_TOKEN"
 
+[ui]
+enabled = true            # dashboard at /ui, sign-in with the static token
+
 [audit]
 path           = "/data/audit.db"
 retention_days = 90

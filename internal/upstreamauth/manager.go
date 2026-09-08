@@ -62,7 +62,19 @@ type entry struct {
 
 	// pending interactive login, if any
 	loginState string
+	loginURL   string
 	code       chan sdkauth.AuthorizationResult
+}
+
+// PendingLogin returns the authorization URL of an in-progress login for
+// id, or "" when there is none.
+func (m *Manager) PendingLogin(id string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.entries[id]; ok && e.code != nil {
+		return e.loginURL
+	}
+	return ""
 }
 
 func New(publicURL string, store *Store, upstreams []Upstream, log *slog.Logger) (*Manager, error) {
@@ -291,6 +303,7 @@ func (m *Manager) StartLogin(ctx context.Context, id string) (string, error) {
 			}
 			m.mu.Lock()
 			e.loginState = u.Query().Get("state")
+			e.loginURL = args.URL
 			m.mu.Unlock()
 			urlCh <- args.URL
 			select {
@@ -361,7 +374,7 @@ func (m *Manager) StartLogin(ctx context.Context, id string) (string, error) {
 
 func (m *Manager) clearLogin(e *entry) {
 	m.mu.Lock()
-	e.code, e.loginState = nil, ""
+	e.code, e.loginState, e.loginURL = nil, "", ""
 	m.mu.Unlock()
 }
 

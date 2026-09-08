@@ -40,7 +40,7 @@ func TestConnectorDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var infos []toolInfo
+	var infos []ToolInfo
 	json.Unmarshal([]byte(out), &infos)
 	names := []string{}
 	for _, i := range infos {
@@ -86,7 +86,7 @@ func TestSearchDiscovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var infos []toolInfo
+		var infos []ToolInfo
 		json.Unmarshal([]byte(out), &infos)
 		var names []string
 		for _, i := range infos {
