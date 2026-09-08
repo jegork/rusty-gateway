@@ -1,6 +1,9 @@
 # rusty-gateway
 
-Single-user MCP aggregator in Go. One long-lived child process per configured
+Single-user MCP aggregator in Go. A personal project: single-user by design,
+no multi-tenancy, no support promised. Issues and PRs are welcome but may sit.
+
+ One long-lived child process per configured
 stdio MCP server, exposed over namespaced streamable HTTP endpoints, protected
 by OAuth bearer tokens validated against an external IdP.
 
@@ -158,9 +161,8 @@ Config reload on SIGHUP is not implemented; restart the process.
 ## Deploy
 
 Each release publishes tarballs for linux/darwin on amd64/arm64 and a
-multi-arch image at `ghcr.io/jegork/rusty-gateway:<tag>` (also `latest`).
-The image is private like the repo, so pulling from Dokploy needs a GitHub
-token with `read:packages`.
+multi-arch image at `ghcr.io/jegork/rusty-gateway:<tag>` (also `latest`),
+pullable without authentication.
 
 The image runs as uid 1000 and ships node 22 with npm, plus uv/uvx, with
 writable caches at `/var/cache/uv` and `/var/cache/npm`. Reference those in
@@ -182,3 +184,7 @@ container HEALTHCHECK uses `gateway healthcheck <url>`, so no curl is needed.
 
 `/healthz` reports `rss_bytes` per upstream, summed over the child and its
 descendants, so the memory a wrapper launcher spawns is visible.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
