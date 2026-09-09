@@ -177,3 +177,31 @@ func TestPrune(t *testing.T) {
 		t.Errorf("second prune deleted %d", n)
 	}
 }
+
+func TestCheckpointTruncatesWAL(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir + "/audit.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	for i := 0; i < 200; i++ {
+		store.Insert(ctx, Row{TS: int64(i), Namespace: "n", Server: "s", Tool: "t", Status: "ok", ArgsJSON: strings.Repeat("x", 500)})
+	}
+	wal, err := os.Stat(dir + "/audit.db-wal")
+	if err != nil || wal.Size() == 0 {
+		t.Fatalf("expected a non-empty wal before checkpoint: %v", err)
+	}
+	if err := store.Checkpoint(ctx); err != nil {
+		t.Fatal(err)
+	}
+	wal, _ = os.Stat(dir + "/audit.db-wal")
+	if wal != nil && wal.Size() != 0 {
+		t.Errorf("wal not truncated: %d bytes", wal.Size())
+	}
+	rows, _ := store.Query(ctx, Filter{Limit: 1000})
+	if len(rows) != 200 {
+		t.Errorf("rows after checkpoint: %d", len(rows))
+	}
+}

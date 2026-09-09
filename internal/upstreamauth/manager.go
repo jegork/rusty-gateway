@@ -261,6 +261,22 @@ func (m *Manager) autoLogin(ctx context.Context, e *entry) {
 	}
 }
 
+// CheckpointDaily folds the state db's wal once a day until ctx ends.
+func (m *Manager) CheckpointDaily(ctx context.Context) {
+	t := time.NewTicker(24 * time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := m.store.Checkpoint(ctx); err != nil && ctx.Err() == nil {
+				m.log.Error("state wal checkpoint failed", "err", err)
+			}
+		}
+	}
+}
+
 // StartLogin runs the authorization flow for an upstream in the background
 // and returns the URL the user must open. The flow completes when the
 // authorization server redirects to CallbackPath.

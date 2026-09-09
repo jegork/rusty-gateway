@@ -78,6 +78,12 @@ func (s *Store) Save(ctx context.Context, id string, c *Credentials) error {
 	return err
 }
 
+// Checkpoint folds the write-ahead log into the main file; see audit.Store.
+func (s *Store) Checkpoint(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
+	return err
+}
+
 func (s *Store) Delete(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM upstream_oauth WHERE id = ?", id)
 	return err

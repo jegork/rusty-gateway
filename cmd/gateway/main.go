@@ -165,6 +165,7 @@ func run(cfgPath string, log *slog.Logger) error {
 	defer sup.Stop()
 	if ua != nil {
 		ua.AutoLogin(ctx)
+		go ua.CheckpointDaily(ctx)
 	}
 
 	var dash *ui.UI

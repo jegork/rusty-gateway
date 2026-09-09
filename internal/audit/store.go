@@ -145,6 +145,14 @@ func (s *Store) Prune(ctx context.Context, before time.Time) (int64, error) {
 	return n, nil
 }
 
+// Checkpoint folds the write-ahead log back into the main file and
+// truncates it, so a plain copy of the db file is a complete backup and the
+// log cannot grow unbounded under constant readers.
+func (s *Store) Checkpoint(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
+	return err
+}
+
 func nullable(s string) any {
 	if s == "" {
 		return nil

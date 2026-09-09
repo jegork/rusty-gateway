@@ -108,7 +108,8 @@ func (s *Sink) row(ctx context.Context, c gateway.Call) Row {
 	return r
 }
 
-// Retention deletes rows older than keep once a day until ctx is done.
+// Retention deletes rows older than keep and checkpoints the wal once a
+// day until ctx is done.
 func Retention(ctx context.Context, store *Store, keep time.Duration, log *slog.Logger) {
 	run := func() {
 		n, err := store.Prune(ctx, time.Now().Add(-keep))
@@ -116,6 +117,9 @@ func Retention(ctx context.Context, store *Store, keep time.Duration, log *slog.
 			log.Error("audit retention failed", "err", err)
 		} else if n > 0 {
 			log.Info("audit retention pruned rows", "rows", n)
+		}
+		if err := store.Checkpoint(ctx); err != nil && ctx.Err() == nil {
+			log.Error("audit wal checkpoint failed", "err", err)
 		}
 	}
 	run()
