@@ -6,7 +6,9 @@ package ui
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
@@ -17,7 +19,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jegork/rusty-gateway/internal/audit"
@@ -53,9 +54,9 @@ type UI struct {
 	d Deps
 	// one template set per page, since each page defines its own "content"
 	pages map[string]*template.Template
-
-	mu       sync.Mutex
-	sessions map[string]time.Time
+	// sessions are stateless signed cookies so they survive redeploys; the
+	// key is derived from the static token, so changing it signs everyone out
+	sessionKey []byte
 }
 
 func New(d Deps) (*UI, error) {
@@ -78,7 +79,8 @@ func New(d Deps) (*UI, error) {
 		return nil, err
 	}
 	pages["login"] = login
-	return &UI{d: d, pages: pages, sessions: map[string]time.Time{}}, nil
+	key := sha256.Sum256([]byte("rusty-gateway-ui-session:" + d.Token))
+	return &UI{d: d, pages: pages, sessionKey: key[:]}, nil
 }
 
 // Handler serves everything under /ui/.
@@ -114,18 +116,34 @@ func (u *UI) auth(next http.HandlerFunc) http.Handler {
 	})
 }
 
-func (u *UI) validSession(id string) bool {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	exp, ok := u.sessions[id]
-	if !ok {
+// session cookies are "<expiry unix>.<nonce>.<hmac>"
+func (u *UI) newSession() string {
+	nonce := make([]byte, 16)
+	rand.Read(nonce)
+	body := fmt.Sprintf("%d.%s", time.Now().Add(sessionTTL).Unix(), hex.EncodeToString(nonce))
+	return body + "." + u.sign(body)
+}
+
+func (u *UI) sign(body string) string {
+	mac := hmac.New(sha256.New, u.sessionKey)
+	mac.Write([]byte(body))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func (u *UI) validSession(cookie string) bool {
+	i := strings.LastIndexByte(cookie, '.')
+	if i < 0 {
 		return false
 	}
-	if time.Now().After(exp) {
-		delete(u.sessions, id)
+	body, sig := cookie[:i], cookie[i+1:]
+	if !hmac.Equal([]byte(sig), []byte(u.sign(body))) {
 		return false
 	}
-	return true
+	var exp int64
+	if _, err := fmt.Sscanf(body, "%d.", &exp); err != nil {
+		return false
+	}
+	return time.Now().Unix() < exp
 }
 
 func (u *UI) loginPage(w http.ResponseWriter, r *http.Request) {
@@ -141,26 +159,17 @@ func (u *UI) login(w http.ResponseWriter, r *http.Request) {
 		u.render(w, "login", map[string]any{"Error": "wrong token"})
 		return
 	}
-	b := make([]byte, 32)
-	rand.Read(b)
-	id := hex.EncodeToString(b)
-	u.mu.Lock()
-	u.sessions[id] = time.Now().Add(sessionTTL)
-	u.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: id, Path: "/ui", HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Name: cookieName, Value: u.newSession(), Path: "/ui", HttpOnly: true, SameSite: http.SameSiteLaxMode,
 		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", MaxAge: int(sessionTTL.Seconds()),
 	})
 	u.d.Logger.Info("ui login", "remote", r.RemoteAddr)
 	http.Redirect(w, r, "/ui/", http.StatusSeeOther)
 }
 
+// logout only clears the cookie; with stateless sessions there is nothing
+// server-side to revoke, which is acceptable for a single operator
 func (u *UI) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(cookieName); err == nil {
-		u.mu.Lock()
-		delete(u.sessions, c.Value)
-		u.mu.Unlock()
-	}
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Path: "/ui", MaxAge: -1})
 	http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 }

@@ -164,3 +164,23 @@ func readAll(res *http.Response) string {
 		}
 	}
 }
+
+func TestSessionsSurviveRestartAndRejectTampering(t *testing.T) {
+	a, _ := New(Deps{Token: "t0k"})
+	b, _ := New(Deps{Token: "t0k"})
+	other, _ := New(Deps{Token: "different"})
+	c := a.newSession()
+	if !a.validSession(c) || !b.validSession(c) {
+		t.Fatal("a session must be valid for any instance with the same token")
+	}
+	if other.validSession(c) {
+		t.Error("a different token must not accept the cookie")
+	}
+	if a.validSession(c[:len(c)-1]+"0") || a.validSession("") || a.validSession("garbage") {
+		t.Error("tampered or malformed cookies must be rejected")
+	}
+	body := "1." + strings.Repeat("0", 32)
+	if a.validSession(body + "." + a.sign(body)) {
+		t.Error("expired session must be rejected even with a valid signature")
+	}
+}
