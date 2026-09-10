@@ -139,6 +139,7 @@ func run(cfgPath string, log *slog.Logger) error {
 	sup := supervisor.New(specs, supOpts)
 	if ua != nil {
 		ua.OnInvalidate = sup.Reconnect
+		ua.OnLogin = sup.Reconnect
 	}
 	gw = gateway.New(sup, namespaces, gateway.Options{
 		Version: version, Logger: log, Limits: limits,

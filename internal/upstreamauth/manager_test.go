@@ -173,6 +173,7 @@ func newHarness(t *testing.T, as *fakeAS, storePath string) *harness {
 		BackoffMax: 50 * time.Millisecond, StableAfter: time.Hour, MaxFailures: 3, OAuth: h.mgr, Logger: log,
 	})
 	h.mgr.OnInvalidate = h.sup.Reconnect
+	h.mgr.OnLogin = h.sup.Reconnect
 	return h
 }
 
@@ -345,4 +346,38 @@ func (l lockedWriter) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.w.Write(p)
+}
+
+func TestReloginReplacesCredentialsAndReconnects(t *testing.T) {
+	as := newFakeAS(t)
+	h := newHarness(t, as, t.TempDir()+"/state.db")
+	h.sup.Start(context.Background())
+	defer h.sup.Stop()
+	authURL, err := h.mgr.StartLogin(context.Background(), "p/notion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	browse(t, authURL)
+	waitFor(t, "ready", func() bool { return h.state() == "ready" })
+	before, _ := h.store.Load(context.Background(), "p/notion")
+
+	// second login while credentials exist: must not panic, must swap tokens,
+	// must reconnect so the session uses them
+	authURL, err = h.mgr.StartLogin(context.Background(), "p/notion")
+	if err != nil {
+		t.Fatalf("re-login refused: %v", err)
+	}
+	browse(t, authURL)
+	waitFor(t, "new credentials stored", func() bool {
+		after, _ := h.store.Load(context.Background(), "p/notion")
+		return after != nil && after.Token.AccessToken != before.Token.AccessToken
+	})
+	waitFor(t, "reconnected and ready", func() bool {
+		st := h.sup.Statuses()[0]
+		return st.State == "ready" && st.Restarts >= 1
+	})
+	u, _ := h.sup.Get("p/notion")
+	if _, err := u.CallTool(context.Background(), &mcp.CallToolParams{Name: "search"}); err != nil {
+		t.Fatalf("call after re-login: %v", err)
+	}
 }

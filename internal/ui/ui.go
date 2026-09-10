@@ -91,6 +91,7 @@ func (u *UI) Handler() http.Handler {
 	mux.HandleFunc("POST /ui/logout", u.logout)
 	mux.Handle("GET /ui/{$}", u.auth(u.overview))
 	mux.Handle("GET /ui/events/overview", u.auth(u.overviewEvents))
+	mux.Handle("GET /ui/oauth/{ns}/{server}/login", u.auth(u.oauthLogin))
 	mux.Handle("GET /ui/tools", u.auth(u.toolsPage))
 	mux.Handle("GET /ui/tools/list", u.auth(u.toolsList))
 	mux.Handle("GET /ui/audit", u.auth(u.auditPage))
@@ -200,6 +201,8 @@ func (u *UI) page(title, page string, extra map[string]any) map[string]any {
 type upstreamRow struct {
 	ID, Kind, State, Breaker, Error, RSS string
 	PID, Tools, Restarts                 int
+	// ReauthURL is set for oauth upstreams; it starts a fresh authorization
+	ReauthURL string
 }
 
 type loginRow struct{ ID, URL string }
@@ -209,10 +212,14 @@ func (u *UI) overviewData() map[string]any {
 	var rows []upstreamRow
 	var logins []loginRow
 	for _, st := range u.d.Supervisor.Statuses() {
-		rows = append(rows, upstreamRow{
+		row := upstreamRow{
 			ID: st.ID, Kind: st.Kind, State: st.State, Breaker: breakers[st.ID], Error: st.Error,
 			RSS: humanBytes(st.RSSBytes), PID: st.PID, Tools: st.Tools, Restarts: st.Restarts,
-		})
+		}
+		if u.d.OAuth != nil && u.d.OAuth.Managed(st.ID) {
+			row.ReauthURL = "/ui/oauth/" + st.ID + "/login"
+		}
+		rows = append(rows, row)
 		if st.State == "needs_login" && u.d.OAuth != nil {
 			if url := u.d.OAuth.PendingLogin(st.ID); url != "" {
 				logins = append(logins, loginRow{st.ID, url})
@@ -232,6 +239,22 @@ func (u *UI) overview(w http.ResponseWriter, r *http.Request) {
 
 func (u *UI) overviewEvents(w http.ResponseWriter, r *http.Request) {
 	u.stream(w, r, func() (string, error) { return u.fragment("overview", "upstreams", u.overviewData()) })
+}
+
+// oauthLogin starts (or restarts) an upstream's authorization and sends the
+// browser to the provider; the provider redirects back to the callback.
+func (u *UI) oauthLogin(w http.ResponseWriter, r *http.Request) {
+	if u.d.OAuth == nil {
+		http.NotFound(w, r)
+		return
+	}
+	id := r.PathValue("ns") + "/" + r.PathValue("server")
+	url, err := u.d.OAuth.StartLogin(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, url, http.StatusSeeOther)
 }
 
 // stream re-renders a fragment every refresh interval until the client leaves.

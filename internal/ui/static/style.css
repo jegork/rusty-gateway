@@ -19,7 +19,7 @@ pre { font: 12px ui-monospace, Menlo, monospace; background:#0b0d11; padding:.6r
 .state-starting, .state-needs_login, .state-half-open, .state-tool_error, .state-timeout { color:var(--warn); }
 .state-failed, .state-open, .state-error, .state-rejected, .state-stopped { color:var(--bad); }
 .notice { background:#2a2411; border:1px solid var(--warn); padding:.6rem .8rem; border-radius:4px; margin-bottom:1rem; }
-.notice a { color:var(--accent); }
+.notice a, td a { color:var(--accent); }
 .row { display:flex; gap:.5rem; margin-bottom:1rem; flex-wrap:wrap; }
 input, select, button { background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:4px; padding:.4rem .6rem; font:inherit; }
 input[type=search], input:not([type]) { min-width: 16rem; }

@@ -14,7 +14,7 @@
 </div>
 {{end}}
 <table>
-  <thead><tr><th>Upstream</th><th>Kind</th><th>State</th><th>PID</th><th>Tools</th><th>Restarts</th><th>RSS</th><th>Breaker</th><th>Error</th></tr></thead>
+  <thead><tr><th>Upstream</th><th>Kind</th><th>State</th><th>PID</th><th>Tools</th><th>Restarts</th><th>RSS</th><th>Breaker</th><th>Error</th><th></th></tr></thead>
   <tbody>
   {{range .Upstreams}}
   <tr>
@@ -27,6 +27,7 @@
     <td>{{.RSS}}</td>
     <td><span class="state state-{{.Breaker}}">{{.Breaker}}</span></td>
     <td class="muted small">{{.Error}}</td>
+    <td class="nowrap">{{if .ReauthURL}}<a href="{{.ReauthURL}}">re-authorize</a>{{end}}</td>
   </tr>
   {{end}}
   </tbody>

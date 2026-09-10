@@ -53,6 +53,9 @@ type Manager struct {
 	// OnInvalidate is called when stored credentials are found to be dead,
 	// so the supervisor can drop the session and show needs_login.
 	OnInvalidate func(id string)
+	// OnLogin is called after a login replaced existing credentials, so the
+	// supervisor reconnects with the new token (and any new scopes).
+	OnLogin func(id string)
 
 	mu      sync.Mutex
 	entries map[string]*entry
@@ -67,6 +70,14 @@ type entry struct {
 	loginState string
 	loginURL   string
 	code       chan sdkauth.AuthorizationResult
+}
+
+// Managed reports whether id is an oauth upstream.
+func (m *Manager) Managed(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.entries[id]
+	return ok
 }
 
 // PendingLogin returns the authorization URL of an in-progress login for
@@ -279,7 +290,9 @@ func (m *Manager) CheckpointDaily(ctx context.Context) {
 
 // StartLogin runs the authorization flow for an upstream in the background
 // and returns the URL the user must open. The flow completes when the
-// authorization server redirects to CallbackPath.
+// authorization server redirects to CallbackPath. It also serves as
+// re-authorization for an upstream that already has credentials, for
+// example to grant scopes added on the provider's side.
 func (m *Manager) StartLogin(ctx context.Context, id string) (string, error) {
 	m.mu.Lock()
 	e, ok := m.entries[id]
@@ -376,10 +389,16 @@ func (m *Manager) StartLogin(ctx context.Context, id string) (string, error) {
 			return
 		}
 		m.mu.Lock()
+		replaced := e.handler != nil
 		e.handler = h
-		close(e.ready)
+		if !replaced {
+			close(e.ready)
+		}
 		m.mu.Unlock()
-		m.log.Info("upstream login complete", "upstream", id)
+		m.log.Info("upstream login complete", "upstream", id, "replaced_existing", replaced)
+		if replaced && m.OnLogin != nil {
+			m.OnLogin(id)
+		}
 	}()
 
 	select {

@@ -118,7 +118,10 @@ curl -H "Authorization: Bearer $GATEWAY_STATIC_TOKEN" \
 
 The server redirects back to `/oauth/callback`, the gateway stores the
 credentials in `data_dir/state.db`, connects, and refreshes tokens silently
-from then on, across restarts. If the server revokes the grant the upstream
+from then on, across restarts. Running the login again on an upstream that
+already has credentials re-authorizes it, for example after granting new
+permissions on the provider's side; the dashboard has a re-authorize link
+per OAuth upstream. If the server revokes the grant the upstream
 returns to `needs_login`. Client registration uses the gateway's own client
 metadata document at `/oauth/client.json`, with dynamic registration as
 fallback; `oauth_client_id` and `oauth_client_secret_env` cover servers that
