@@ -27,7 +27,10 @@ type Config struct {
 	// resource URL are always accepted.
 	Audience      string
 	RequiredScope string
-	StaticToken   string
+	// Scopes is advertised as scopes_supported; RequiredScope is what the
+	// gateway actually enforces.
+	Scopes      []string
+	StaticToken string
 	// Resources are the protected endpoints, e.g. "/mcp/personal". Each gets
 	// its own RFC 9728 metadata document and is an accepted aud value, so
 	// clients can send resource=<endpoint url> as the MCP spec requires.
@@ -97,9 +100,7 @@ func (a *Authenticator) metadata(resource string) http.Handler {
 	if a.cfg.Issuer != "" {
 		md.AuthorizationServers = []string{a.cfg.Issuer}
 	}
-	if a.cfg.RequiredScope != "" {
-		md.ScopesSupported = []string{a.cfg.RequiredScope}
-	}
+	md.ScopesSupported = a.cfg.Scopes
 	return sdkauth.ProtectedResourceMetadataHandler(md)
 }
 

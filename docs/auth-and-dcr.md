@@ -120,6 +120,14 @@ issuer         = "https://auth.example"
 required_scope = "mcp:use"
 ```
 
+The gateway advertises `scopes_supported = [required_scope, "offline_access"]`
+in its RFC 9728 metadata. Clients request what the resource advertises, and
+Authelia only issues a refresh token when `offline_access` is in the request,
+so `offline_access` must be in every client's `scopes` list above. Codex was
+losing its session exactly one `access_token` lifespan after login before
+this was advertised. Authelia always asks for explicit consent when
+`offline_access` is requested, even with `consent_mode: implicit`.
+
 Claude Code:
 
 ```sh

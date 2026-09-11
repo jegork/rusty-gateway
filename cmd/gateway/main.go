@@ -72,7 +72,8 @@ func run(cfgPath string, log *slog.Logger) error {
 	}
 	authn, err := auth.New(ctx, auth.Config{
 		PublicURL: cfg.Server.PublicURL, Issuer: cfg.Auth.Issuer, Audience: cfg.Auth.Audience,
-		RequiredScope: cfg.Auth.RequiredScope, StaticToken: cfg.Auth.StaticToken, Resources: resources, Logger: log,
+		RequiredScope: cfg.Auth.RequiredScope, Scopes: cfg.Auth.Scopes, StaticToken: cfg.Auth.StaticToken,
+		Resources: resources, Logger: log,
 	})
 	if err != nil {
 		return err

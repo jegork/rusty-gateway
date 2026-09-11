@@ -138,6 +138,18 @@ A static bearer token from `auth.static_token_env` is accepted alongside for
 scripts. Client registration is static in the IdP; see
 [docs/auth-and-dcr.md](docs/auth-and-dcr.md) for why and for Authelia config.
 
+The resource metadata advertises `required_scope` plus `offline_access`
+(override with `auth.scopes`). Clients such as Codex request exactly what is
+advertised, and without `offline_access` the IdP never issues a refresh
+token, so every session would die when the access token expires.
+
+The full login flow against a real Authelia runs as an integration test
+(needs Docker):
+
+```sh
+go test -tags integration -run TestAuthelia ./internal/auth/
+```
+
 ## Process model
 
 One child per `(namespace, server)`, started at boot in its own process group,

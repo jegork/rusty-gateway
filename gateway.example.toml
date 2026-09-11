@@ -7,6 +7,9 @@ data_dir   = "/data"     # gateway state such as upstream oauth credentials
 # OIDC issuer (Authelia, Keycloak, ...). Tokens must be JWTs with aud = audience.
 issuer           = "https://auth.example"
 required_scope   = "mcp:use"
+# scopes clients are told to request; defaults to required_scope plus
+# offline_access, without which most IdPs never issue a refresh token
+# scopes         = ["mcp:use", "offline_access"]
 # tokens must carry aud = public_url or public_url + "/mcp/{namespace}";
 # audience adds one more accepted value if your IdP uses a fixed name
 # audience       = "mcp-gateway"

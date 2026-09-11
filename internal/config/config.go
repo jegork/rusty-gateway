@@ -69,10 +69,14 @@ type Server struct {
 }
 
 type Auth struct {
-	Issuer         string `toml:"issuer"`
-	Audience       string `toml:"audience"`
-	RequiredScope  string `toml:"required_scope"`
-	StaticTokenEnv string `toml:"static_token_env"`
+	Issuer        string `toml:"issuer"`
+	Audience      string `toml:"audience"`
+	RequiredScope string `toml:"required_scope"`
+	// Scopes is what clients are told to request (RFC 9728
+	// scopes_supported). Defaults to required_scope plus offline_access,
+	// since without offline_access most IdPs issue no refresh token.
+	Scopes         []string `toml:"scopes"`
+	StaticTokenEnv string   `toml:"static_token_env"`
 
 	// resolved from StaticTokenEnv at load; never serialized
 	StaticToken string `toml:"-"`
@@ -175,6 +179,14 @@ func (c *Config) applyDefaults() {
 			c.Server.DataDir = filepath.Dir(c.Audit.Path)
 		} else {
 			c.Server.DataDir = "."
+		}
+	}
+	if len(c.Auth.Scopes) == 0 {
+		if c.Auth.RequiredScope != "" {
+			c.Auth.Scopes = append(c.Auth.Scopes, c.Auth.RequiredScope)
+		}
+		if c.Auth.Issuer != "" {
+			c.Auth.Scopes = append(c.Auth.Scopes, "offline_access")
 		}
 	}
 	if c.Audit.RetentionDays == 0 {

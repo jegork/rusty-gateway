@@ -6,20 +6,31 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/oauth2"
 )
 
 type fakeIdP struct {
 	srv *httptest.Server
 	key *rsa.PrivateKey
+
+	mu       sync.Mutex
+	refresh  map[string]grant // refresh token -> what it was granted for
+	nextID   int
+	tokenTTL time.Duration
 }
+
+type grant struct{ scope, aud string }
 
 func newFakeIdP(t *testing.T) *fakeIdP {
 	t.Helper()
@@ -27,8 +38,50 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fakeIdP{key: key}
+	f := &fakeIdP{key: key, refresh: map[string]grant{}, tokenTTL: time.Hour}
 	mux := http.NewServeMux()
+	// token endpoint that behaves like authelia: any code is accepted, a
+	// refresh token is only issued when offline_access was requested
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		var g grant
+		switch r.Form.Get("grant_type") {
+		case "authorization_code":
+			g = grant{scope: r.Form.Get("scope"), aud: r.Form.Get("resource")}
+		case "refresh_token":
+			old, ok := f.refresh[r.Form.Get("refresh_token")]
+			if !ok {
+				w.WriteHeader(400)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
+				return
+			}
+			delete(f.refresh, r.Form.Get("refresh_token"))
+			g = old
+		default:
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": "unsupported_grant_type"})
+			return
+		}
+		f.nextID++
+		resp := map[string]any{
+			"access_token": f.token(t, key, jwt.MapClaims{"aud": g.aud, "scope": g.scope, "client_id": r.Form.Get("client_id"),
+				"jti": fmt.Sprint(f.nextID), "exp": time.Now().Add(f.tokenTTL).Unix()}),
+			"token_type": "bearer",
+			"expires_in": int(f.tokenTTL.Seconds()),
+		}
+		if strings.Contains(" "+g.scope+" ", " offline_access ") {
+			rt := fmt.Sprintf("rt-%d", f.nextID)
+			f.refresh[rt] = g
+			resp["refresh_token"] = rt
+		}
+		json.NewEncoder(w).Encode(resp)
+	})
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"issuer":                                f.srv.URL,
@@ -68,8 +121,12 @@ func (f *fakeIdP) token(t *testing.T, key *rsa.PrivateKey, claims jwt.MapClaims)
 }
 
 func protected(t *testing.T, cfg Config) *httptest.Server {
+	return protectedCtx(t, context.Background(), cfg)
+}
+
+func protectedCtx(t *testing.T, ctx context.Context, cfg Config) *httptest.Server {
 	t.Helper()
-	a, err := New(context.Background(), cfg)
+	a, err := New(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,4 +246,85 @@ func TestOIDCToken(t *testing.T) {
 	if code != 200 || !strings.Contains(body, `"authorization_servers":["`+idp.srv.URL+`"]`) {
 		t.Errorf("metadata: %d %s", code, body)
 	}
+}
+
+// walks the flow a spec-following MCP client uses: 401 -> resource metadata
+// -> scopes_supported -> token exchange -> call -> refresh -> call
+func TestClientFlowGetsRefreshableToken(t *testing.T) {
+	idp := newFakeIdP(t)
+	s := protected(t, Config{
+		PublicURL: "https://gw.example", Issuer: idp.srv.URL, RequiredScope: "mcp:use",
+		Scopes: []string{"mcp:use", "offline_access"}, Resources: []string{"/mcp/x"},
+	})
+
+	code, _, hdr := get(t, s.URL+"/mcp/x", "")
+	if code != 401 {
+		t.Fatalf("unauthenticated: %d", code)
+	}
+	m := regexp.MustCompile(`resource_metadata="([^"]+)"`).FindStringSubmatch(hdr.Get("WWW-Authenticate"))
+	if m == nil {
+		t.Fatalf("no resource_metadata in %q", hdr.Get("WWW-Authenticate"))
+	}
+	// the metadata url is built from the public url; rewrite to the test server
+	code, body, _ := get(t, strings.Replace(m[1], "https://gw.example", s.URL, 1), "")
+	if code != 200 {
+		t.Fatalf("metadata: %d %s", code, body)
+	}
+	var md struct {
+		Resource string   `json:"resource"`
+		Scopes   []string `json:"scopes_supported"`
+	}
+	if err := json.Unmarshal([]byte(body), &md); err != nil {
+		t.Fatal(err)
+	}
+
+	conf := &oauth2.Config{
+		ClientID: "codex",
+		Endpoint: oauth2.Endpoint{AuthURL: idp.srv.URL + "/authorize", TokenURL: idp.srv.URL + "/token", AuthStyle: oauth2.AuthStyleInParams},
+		Scopes:   md.Scopes,
+	}
+	ctx := context.Background()
+	tok, err := conf.Exchange(ctx, "any-code", oauth2.SetAuthURLParam("resource", md.Resource),
+		oauth2.SetAuthURLParam("scope", strings.Join(md.Scopes, " ")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.RefreshToken == "" {
+		t.Fatalf("no refresh token issued for scopes %v", md.Scopes)
+	}
+	if code, body, _ := get(t, s.URL+"/mcp/x", tok.AccessToken); code != 200 || body != "codex" {
+		t.Fatalf("first token: %d %s", code, body)
+	}
+
+	tok.Expiry = time.Now().Add(-time.Minute)
+	fresh, err := conf.TokenSource(ctx, tok).Token()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.AccessToken == tok.AccessToken {
+		t.Fatal("token source did not refresh")
+	}
+	if code, body, _ := get(t, s.URL+"/mcp/x", fresh.AccessToken); code != 200 || body != "codex" {
+		t.Fatalf("refreshed token: %d %s", code, body)
+	}
+	// a rotated refresh token is single use
+	if _, err := conf.TokenSource(ctx, &oauth2.Token{RefreshToken: tok.RefreshToken}).Token(); err == nil {
+		t.Fatal("old refresh token still accepted")
+	}
+
+	t.Run("required scope alone yields no refresh token", func(t *testing.T) {
+		conf := *conf
+		conf.Scopes = []string{"mcp:use"}
+		tok, err := conf.Exchange(ctx, "any-code", oauth2.SetAuthURLParam("resource", md.Resource),
+			oauth2.SetAuthURLParam("scope", "mcp:use"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tok.RefreshToken != "" {
+			t.Fatal("fake idp handed out a refresh token without offline_access")
+		}
+		if code, _, _ := get(t, s.URL+"/mcp/x", tok.AccessToken); code != 200 {
+			t.Fatalf("access token still valid: %d", code)
+		}
+	})
 }

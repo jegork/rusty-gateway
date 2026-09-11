@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -160,5 +161,37 @@ call_timeout = "90s"
 	c2, _ := Parse([]byte(minimal(cmd)), lookup(map[string]string{"TOK": "t", "SECRET": "s"}))
 	if c2.Limits.CallTimeout.Duration != 60*time.Second || c2.Breaker.Failures != 0 {
 		t.Errorf("defaults: %+v %+v", c2.Limits, c2.Breaker)
+	}
+}
+
+func TestAdvertisedScopesDefault(t *testing.T) {
+	base := `
+[server]
+public_url = "http://gw.test"
+[[namespace]]
+name = "n"
+servers = ["s"]
+[servers.s]
+command = "` + writeExec(t) + `"
+`
+	cases := []struct {
+		name, auth string
+		want       []string
+	}{
+		{"issuer adds offline_access", "[auth]\nissuer = \"http://idp\"\nrequired_scope = \"mcp:use\"\n", []string{"mcp:use", "offline_access"}},
+		{"issuer without required scope", "[auth]\nissuer = \"http://idp\"\n", []string{"offline_access"}},
+		{"static token only", "[auth]\nstatic_token_env = \"TOK\"\nrequired_scope = \"mcp:use\"\n", []string{"mcp:use"}},
+		{"explicit list wins", "[auth]\nissuer = \"http://idp\"\nrequired_scope = \"mcp:use\"\nscopes = [\"mcp:use\"]\n", []string{"mcp:use"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Parse([]byte(base+tc.auth), func(k string) (string, bool) { return "x", k == "TOK" })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(cfg.Auth.Scopes, tc.want) {
+				t.Errorf("scopes = %v, want %v", cfg.Auth.Scopes, tc.want)
+			}
+		})
 	}
 }
