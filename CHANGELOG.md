@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0](https://github.com/jegork/rusty-gateway/compare/v0.2.0...v0.3.0) (2026-09-24)
+
+
+### Features
+
+* daily wal checkpoint for the audit and state databases ([947a4fc](https://github.com/jegork/rusty-gateway/commit/947a4fcb014606af7a0ffeb5c4998dcba6e0750b))
+* re-authorize oauth upstreams from the dashboard and the login endpoint ([f7d13e5](https://github.com/jegork/rusty-gateway/commit/f7d13e5fbc4a58f97fb7042b7023ef5e19cf84da))
+
+
+### Bug Fixes
+
+* advertise offline_access so clients obtain refresh tokens ([ab757f4](https://github.com/jegork/rusty-gateway/commit/ab757f40d83ec6cc8d51b6d01d38557b37c462d0))
+* serve namespaces stateless so 2026-07-28 clients like chatgpt can connect ([4ce455b](https://github.com/jegork/rusty-gateway/commit/4ce455bd7b6e4208cbe165ecc7ce67e25f340aeb))
+* sign dashboard sessions so they survive redeploys ([e7782c9](https://github.com/jegork/rusty-gateway/commit/e7782c9896902d96921219699bdfbd64484aab79))
+
 ## [0.2.0](https://github.com/jegork/rusty-gateway/compare/v0.1.0...v0.2.0) (2026-09-08)
 
 
