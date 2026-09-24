@@ -271,8 +271,10 @@ func (g *Gateway) Handler(name string) http.Handler {
 			http.Error(w, "unknown namespace: "+name, http.StatusNotFound)
 		})
 	}
+	// stateless is the only mode the sdk serves 2026-07-28 in, and hosted
+	// clients such as chatgpt refuse to fall back to older versions
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return ns.server },
-		&mcp.StreamableHTTPOptions{Logger: g.log, SessionTimeout: 30 * time.Minute})
+		&mcp.StreamableHTTPOptions{Logger: g.log, Stateless: true})
 }
 
 // SessionCount is the number of live client sessions across namespaces.
