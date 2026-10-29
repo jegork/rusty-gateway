@@ -21,7 +21,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
+
 	"github.com/jegork/rusty-gateway/internal/audit"
+	"github.com/jegork/rusty-gateway/internal/auth"
+	"github.com/jegork/rusty-gateway/internal/config"
 	"github.com/jegork/rusty-gateway/internal/gateway"
 	"github.com/jegork/rusty-gateway/internal/supervisor"
 	"github.com/jegork/rusty-gateway/internal/upstreamauth"
@@ -46,6 +50,7 @@ type Deps struct {
 	OAuth      *upstreamauth.Manager // optional
 	Sessions   func() int            // live mcp client sessions, optional
 	Token      string                // the static gateway token doubles as the dashboard password
+	Cloudflare config.CloudflareAccess
 	Version    string
 	Logger     *slog.Logger
 }
@@ -56,12 +61,17 @@ type UI struct {
 	pages map[string]*template.Template
 	// sessions are stateless signed cookies so they survive redeploys; the
 	// key is derived from the static token, so changing it signs everyone out
-	sessionKey []byte
+	sessionKey     []byte
+	accessVerifier *oidc.IDTokenVerifier
 }
 
-func New(d Deps) (*UI, error) {
-	if d.Token == "" {
-		return nil, fmt.Errorf("ui needs auth.static_token_env so there is something to sign in with")
+func New(ctx context.Context, d Deps) (*UI, error) {
+	access, err := auth.NewCloudflareVerifier(ctx, d.Cloudflare)
+	if err != nil {
+		return nil, fmt.Errorf("ui.cloudflare: %w", err)
+	}
+	if d.Token == "" && access == nil {
+		return nil, fmt.Errorf("ui needs auth.static_token_env or ui.cloudflare to sign in")
 	}
 	if d.Logger == nil {
 		d.Logger = slog.Default()
@@ -79,33 +89,43 @@ func New(d Deps) (*UI, error) {
 		return nil, err
 	}
 	pages["login"] = login
-	key := sha256.Sum256([]byte("rusty-gateway-ui-session:" + d.Token))
-	return &UI{d: d, pages: pages, sessionKey: key[:]}, nil
+	u := &UI{d: d, pages: pages, accessVerifier: access}
+	if access == nil {
+		key := sha256.Sum256([]byte("rusty-gateway-ui-session:" + d.Token))
+		u.sessionKey = key[:]
+	}
+	return u, nil
 }
 
 // Handler serves everything under /ui/.
 func (u *UI) Handler() http.Handler {
 	static, _ := fs.Sub(staticFS, "static")
+	pages := http.NewServeMux()
+	pages.HandleFunc("GET /ui/{$}", u.overview)
+	pages.HandleFunc("GET /ui/events/overview", u.overviewEvents)
+	pages.HandleFunc("GET /ui/oauth/{ns}/{server}/login", u.oauthLogin)
+	pages.HandleFunc("GET /ui/tools", u.toolsPage)
+	pages.HandleFunc("GET /ui/tools/list", u.toolsList)
+	pages.HandleFunc("GET /ui/audit", u.auditPage)
+	pages.HandleFunc("GET /ui/audit/rows", u.auditRows)
 	mux := http.NewServeMux()
 	mux.Handle("GET /ui/static/", http.StripPrefix("/ui/static/", http.FileServer(http.FS(static))))
 	mux.HandleFunc("GET /ui/login", u.loginPage)
-	mux.HandleFunc("POST /ui/login", u.login)
 	mux.HandleFunc("POST /ui/logout", u.logout)
-	mux.Handle("GET /ui/{$}", u.auth(u.overview))
-	mux.Handle("GET /ui/events/overview", u.auth(u.overviewEvents))
-	mux.Handle("GET /ui/oauth/{ns}/{server}/login", u.auth(u.oauthLogin))
-	mux.Handle("GET /ui/tools", u.auth(u.toolsPage))
-	mux.Handle("GET /ui/tools/list", u.auth(u.toolsList))
-	mux.Handle("GET /ui/audit", u.auth(u.auditPage))
-	mux.Handle("GET /ui/audit/rows", u.auth(u.auditRows))
+	if u.accessVerifier != nil {
+		mux.Handle("/ui/", pages)
+		return u.cloudflareAuth(mux)
+	}
+	mux.HandleFunc("POST /ui/login", u.login)
+	mux.Handle("/ui/", u.auth(pages))
 	return mux
 }
 
 // auth requires a session cookie; pages redirect to login, streams get 401.
-func (u *UI) auth(next http.HandlerFunc) http.Handler {
+func (u *UI) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(cookieName); err == nil && u.validSession(c.Value) {
-			next(w, r)
+			next.ServeHTTP(w, r)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/ui/events/") || strings.HasPrefix(r.URL.Path, "/ui/tools/list") || strings.HasPrefix(r.URL.Path, "/ui/audit/rows") {
@@ -113,6 +133,21 @@ func (u *UI) auth(next http.HandlerFunc) http.Handler {
 			return
 		}
 		http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
+	})
+}
+
+func (u *UI) cloudflareAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("Cf-Access-Jwt-Assertion")
+		if token == "" {
+			http.Error(w, "Cloudflare Access authentication required", http.StatusUnauthorized)
+			return
+		}
+		if _, err := u.accessVerifier.Verify(r.Context(), token); err != nil {
+			http.Error(w, "invalid Cloudflare Access token", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -147,6 +182,10 @@ func (u *UI) validSession(cookie string) bool {
 }
 
 func (u *UI) loginPage(w http.ResponseWriter, r *http.Request) {
+	if u.accessVerifier != nil {
+		http.Redirect(w, r, "/ui/", http.StatusSeeOther)
+		return
+	}
 	u.render(w, "login", map[string]any{"Error": ""})
 }
 
@@ -170,6 +209,10 @@ func (u *UI) login(w http.ResponseWriter, r *http.Request) {
 // logout only clears the cookie; with stateless sessions there is nothing
 // server-side to revoke, which is acceptable for a single operator
 func (u *UI) logout(w http.ResponseWriter, r *http.Request) {
+	if u.accessVerifier != nil {
+		http.Redirect(w, r, "/cdn-cgi/access/logout", http.StatusSeeOther)
+		return
+	}
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Path: "/ui", MaxAge: -1})
 	http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 }

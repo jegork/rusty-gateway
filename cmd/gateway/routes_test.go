@@ -16,6 +16,7 @@ import (
 	"github.com/jegork/rusty-gateway/internal/fakeserver"
 	"github.com/jegork/rusty-gateway/internal/gateway"
 	"github.com/jegork/rusty-gateway/internal/supervisor"
+	"github.com/jegork/rusty-gateway/internal/ui"
 )
 
 func TestMain(m *testing.M) {
@@ -35,6 +36,9 @@ public_url = "http://gw.test"
 [auth]
 static_token_env = "TOK"
 required_scope = "mcp:use"
+[ui.cloudflare]
+team_domain = "https://rusty-rocket.cloudflareaccess.com"
+audience = "dashboard-audience"
 [[namespace]]
 name = "personal"
 servers = ["fake"]
@@ -65,7 +69,13 @@ args = ["` + strings.Join(args, `", "`) + `"]
 	defer sup.Stop()
 	gw.RefreshAll()
 
-	srv := httptest.NewServer(newMux(cfg, authn, gw, sup, nil, nil, nil))
+	dash, err := ui.New(context.Background(), ui.Deps{
+		Supervisor: sup, Gateway: gw, Token: cfg.Auth.StaticToken, Cloudflare: cfg.UI.Cloudflare, Logger: log,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(newMux(cfg, authn, gw, sup, nil, nil, dash))
 	defer srv.Close()
 
 	get := func(path, token string) (int, string) {
@@ -88,6 +98,9 @@ args = ["` + strings.Join(args, `", "`) + `"]
 			}
 		}
 		return res.StatusCode, sb.String()
+	}
+	if code, _ := get("/ui/", "s3cret"); code != 401 {
+		t.Errorf("MCP bearer token must not authenticate Cloudflare dashboard: %d", code)
 	}
 	if code, body := get("/healthz", ""); code != 200 || !strings.Contains(body, `"personal/fake"`) {
 		t.Errorf("healthz: %d %s", code, body)

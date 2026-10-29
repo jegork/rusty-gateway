@@ -74,6 +74,7 @@ func run(cfgPath string, log *slog.Logger) error {
 		PublicURL: cfg.Server.PublicURL, Issuer: cfg.Auth.Issuer, Audience: cfg.Auth.Audience,
 		RequiredScope: cfg.Auth.RequiredScope, Scopes: cfg.Auth.Scopes, StaticToken: cfg.Auth.StaticToken,
 		Resources: resources, Logger: log,
+		Cloudflare: cfg.Auth.Cloudflare,
 	})
 	if err != nil {
 		return err
@@ -173,12 +174,13 @@ func run(cfgPath string, log *slog.Logger) error {
 	var dash *ui.UI
 	switch {
 	case !cfg.UI.On():
-	case cfg.Auth.StaticToken == "":
-		log.Warn("ui disabled: set auth.static_token_env to enable sign-in")
+	case cfg.Auth.StaticToken == "" && cfg.UI.Cloudflare.TeamDomain == "":
+		log.Warn("ui disabled: set auth.static_token_env or ui.cloudflare to enable sign-in")
 	default:
-		dash, err = ui.New(ui.Deps{
+		dash, err = ui.New(ctx, ui.Deps{
 			Supervisor: sup, Gateway: gw, Audit: store, OAuth: ua, Sessions: gw.SessionCount,
 			Token: cfg.Auth.StaticToken, Version: version, Logger: log,
+			Cloudflare: cfg.UI.Cloudflare,
 		})
 		if err != nil {
 			return err

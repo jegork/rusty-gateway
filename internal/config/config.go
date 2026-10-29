@@ -25,9 +25,30 @@ type Config struct {
 	Servers    map[string]Server_ `toml:"servers"`
 }
 
-// UI serves the dashboard at /ui when enabled; sign-in uses the static token.
+// UI serves the dashboard at /ui when enabled.
 type UI struct {
-	Enabled *bool `toml:"enabled"`
+	Enabled    *bool            `toml:"enabled"`
+	Cloudflare CloudflareAccess `toml:"cloudflare"`
+}
+
+type CloudflareAccess struct {
+	TeamDomain string `toml:"team_domain"`
+	Audience   string `toml:"audience"`
+}
+
+func (c CloudflareAccess) Validate() error {
+	if c.TeamDomain == "" && c.Audience == "" {
+		return nil
+	}
+	if c.TeamDomain == "" || strings.TrimSpace(c.Audience) == "" {
+		return errors.New("team_domain and audience are both required")
+	}
+	u, err := url.Parse(c.TeamDomain)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
+		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return errors.New("team_domain must be an https origin, e.g. https://rusty-rocket.cloudflareaccess.com")
+	}
+	return nil
 }
 
 func (u UI) On() bool { return u.Enabled == nil || *u.Enabled }
@@ -75,8 +96,9 @@ type Auth struct {
 	// Scopes is what clients are told to request (RFC 9728
 	// scopes_supported). Defaults to required_scope plus offline_access,
 	// since without offline_access most IdPs issue no refresh token.
-	Scopes         []string `toml:"scopes"`
-	StaticTokenEnv string   `toml:"static_token_env"`
+	Scopes         []string         `toml:"scopes"`
+	StaticTokenEnv string           `toml:"static_token_env"`
+	Cloudflare     CloudflareAccess `toml:"cloudflare"`
 
 	// resolved from StaticTokenEnv at load; never serialized
 	StaticToken string `toml:"-"`
@@ -247,11 +269,21 @@ func (c *Config) validate() error {
 	if c.Server.PublicURL == "" {
 		errs = append(errs, errors.New("server.public_url is required"))
 	}
-	if c.Auth.Issuer == "" && c.Auth.StaticTokenEnv == "" {
-		errs = append(errs, errors.New("auth: set auth.issuer, auth.static_token_env, or both"))
+	if c.Auth.Issuer == "" && c.Auth.StaticTokenEnv == "" && c.Auth.Cloudflare.TeamDomain == "" {
+		errs = append(errs, errors.New("auth: set auth.issuer, auth.static_token_env, or auth.cloudflare"))
 	}
 	if c.Auth.StaticTokenEnv != "" && c.Auth.StaticToken == "" {
 		errs = append(errs, fmt.Errorf("auth.static_token_env: %s is unset or empty", c.Auth.StaticTokenEnv))
+	}
+	if err := c.Auth.Cloudflare.Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("auth.cloudflare: %w", err))
+	}
+	if c.Auth.Cloudflare.TeamDomain != "" && (c.Auth.Issuer != "" || c.Auth.Audience != "" ||
+		c.Auth.RequiredScope != "" || len(c.Auth.Scopes) != 0 || c.Auth.StaticTokenEnv != "") {
+		errs = append(errs, errors.New("auth.cloudflare is mutually exclusive with issuer, audience, required_scope, scopes, and static_token_env"))
+	}
+	if err := c.UI.Cloudflare.Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("ui.cloudflare: %w", err))
 	}
 	if c.Limits.MaxConcurrent < 0 || c.Limits.PerNamespace < 0 || c.Limits.PerServer < 0 || c.Limits.CallTimeout.Duration < 0 {
 		errs = append(errs, errors.New("limits: values must not be negative"))

@@ -2,6 +2,11 @@
 
 Date: 2026-09-07. Answers open question 1 of the design doc.
 
+This decision describes the OIDC/static-token mode. The gateway also supports
+[Cloudflare Managed OAuth](../README.md#cloudflare-managed-oauth-for-mcp-clients)
+via `[auth.cloudflare]`, where Cloudflare owns client registration, discovery,
+and OAuth grants and the gateway validates the forwarded Access assertion.
+
 ## What was verified
 
 | Question | Answer | Source |

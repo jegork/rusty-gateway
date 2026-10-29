@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/jegork/rusty-gateway/internal/config"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
@@ -34,19 +35,31 @@ type Config struct {
 	// Resources are the protected endpoints, e.g. "/mcp/personal". Each gets
 	// its own RFC 9728 metadata document and is an accepted aud value, so
 	// clients can send resource=<endpoint url> as the MCP spec requires.
-	Resources []string
-	Logger    *slog.Logger
+	Resources  []string
+	Logger     *slog.Logger
+	Cloudflare config.CloudflareAccess
 }
 
 type Authenticator struct {
-	cfg      Config
-	verifier *oidc.IDTokenVerifier
-	audience []string
+	cfg            Config
+	verifier       *oidc.IDTokenVerifier
+	audience       []string
+	accessVerifier *oidc.IDTokenVerifier
 }
 
 func New(ctx context.Context, cfg Config) (*Authenticator, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	access, err := NewCloudflareVerifier(ctx, cfg.Cloudflare)
+	if err != nil {
+		return nil, fmt.Errorf("auth.cloudflare: %w", err)
+	}
+	if access != nil {
+		if cfg.Issuer != "" || cfg.StaticToken != "" || cfg.Audience != "" || cfg.RequiredScope != "" || len(cfg.Scopes) != 0 {
+			return nil, errors.New("auth.cloudflare cannot be combined with bearer-token authentication")
+		}
+		return &Authenticator{cfg: cfg, accessVerifier: access}, nil
 	}
 	a := &Authenticator{cfg: cfg, audience: []string{cfg.PublicURL}}
 	if cfg.Audience != "" {
@@ -68,9 +81,11 @@ func New(ctx context.Context, cfg Config) (*Authenticator, error) {
 	return a, nil
 }
 
-// Middleware wraps h with bearer-token enforcement for the given resource
-// path, so the 401 challenge points at that resource's metadata.
+// middleware authenticates requests using the configured mode.
 func (a *Authenticator) Middleware(resource string) func(http.Handler) http.Handler {
+	if a.accessVerifier != nil {
+		return a.cloudflareMiddleware
+	}
 	opts := &sdkauth.RequireBearerTokenOptions{
 		ResourceMetadataURL: a.cfg.PublicURL + MetadataPath + resource,
 	}
@@ -83,6 +98,10 @@ func (a *Authenticator) Middleware(resource string) func(http.Handler) http.Hand
 // MetadataHandler serves RFC 9728 metadata at MetadataPath (for the
 // gateway as a whole) and MetadataPath+resource for each resource.
 func (a *Authenticator) MetadataHandler() http.Handler {
+	if a.accessVerifier != nil {
+		// cloudflare owns discovery and challenges in managed oauth mode
+		return http.NotFoundHandler()
+	}
 	mux := http.NewServeMux()
 	mux.Handle(MetadataPath, a.metadata(""))
 	for _, r := range a.cfg.Resources {

@@ -16,8 +16,19 @@ required_scope   = "mcp:use"
 # optional: env var holding a static bearer token for scripts and bootstrapping
 static_token_env = "GATEWAY_STATIC_TOKEN"
 
+# alternative: replace all auth settings above with Cloudflare Managed OAuth
+# [auth.cloudflare]
+# team_domain = "https://your-team.cloudflareaccess.com"
+# audience = "your-mcp-access-application-aud-tag"
+# enable managed oauth on the Access application protecting /mcp/*
+
 [ui]
-enabled = true            # dashboard at /ui, sign-in with the static token
+enabled = true            # dashboard at /ui, static-token login unless cloudflare is configured
+
+# optional: replace dashboard token login with Cloudflare Access
+# [ui.cloudflare]
+# team_domain = "https://your-team.cloudflareaccess.com"
+# audience = "your-access-application-aud-tag"
 
 [audit]
 path           = "/data/audit.db"

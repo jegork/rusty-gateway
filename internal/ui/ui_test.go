@@ -42,7 +42,7 @@ func newServer(t *testing.T) (*httptest.Server, *audit.Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	u, err := New(Deps{Supervisor: sup, Gateway: gw, Audit: store, Token: "t0k", Version: "test", Logger: log, Sessions: gw.SessionCount})
+	u, err := New(context.Background(), Deps{Supervisor: sup, Gateway: gw, Audit: store, Token: "t0k", Version: "test", Logger: log, Sessions: gw.SessionCount})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,9 +166,9 @@ func readAll(res *http.Response) string {
 }
 
 func TestSessionsSurviveRestartAndRejectTampering(t *testing.T) {
-	a, _ := New(Deps{Token: "t0k"})
-	b, _ := New(Deps{Token: "t0k"})
-	other, _ := New(Deps{Token: "different"})
+	a, _ := New(context.Background(), Deps{Token: "t0k"})
+	b, _ := New(context.Background(), Deps{Token: "t0k"})
+	other, _ := New(context.Background(), Deps{Token: "different"})
 	c := a.newSession()
 	if !a.validSession(c) || !b.validSession(c) {
 		t.Fatal("a session must be valid for any instance with the same token")

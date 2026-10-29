@@ -195,3 +195,65 @@ command = "` + writeExec(t) + `"
 		})
 	}
 }
+
+func TestCloudflareConfiguration(t *testing.T) {
+	base := minimal(writeExec(t))
+	for _, tc := range []struct {
+		name, fields string
+		valid        bool
+	}{
+		{"configured", `team_domain = "https://rusty-rocket.cloudflareaccess.com"
+audience = "dashboard-audience"`, true},
+		{"trailing slash", `team_domain = "https://rusty-rocket.cloudflareaccess.com/"
+audience = "dashboard-audience"`, true},
+		{"missing audience", `team_domain = "https://rusty-rocket.cloudflareaccess.com"`, false},
+		{"missing domain", `audience = "dashboard-audience"`, false},
+		{"blank audience", `team_domain = "https://rusty-rocket.cloudflareaccess.com"
+audience = " "`, false},
+		{"insecure domain", `team_domain = "http://rusty-rocket.cloudflareaccess.com"
+audience = "dashboard-audience"`, false},
+		{"domain with path", `team_domain = "https://rusty-rocket.cloudflareaccess.com/login"
+audience = "dashboard-audience"`, false},
+		{"domain with query", `team_domain = "https://rusty-rocket.cloudflareaccess.com?team=other"
+audience = "dashboard-audience"`, false},
+		{"domain with userinfo", `team_domain = "https://user@rusty-rocket.cloudflareaccess.com"
+audience = "dashboard-audience"`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse([]byte(base+"\n[ui.cloudflare]\n"+tc.fields), lookup(map[string]string{"TOK": "t", "SECRET": "s"}))
+			if tc.valid && err != nil {
+				t.Fatal(err)
+			}
+			if !tc.valid && (err == nil || !strings.Contains(err.Error(), "ui.cloudflare")) {
+				t.Fatalf("want Cloudflare configuration error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestCloudflareMCPModeIsExclusive(t *testing.T) {
+	base := minimal(writeExec(t))
+	for _, legacy := range []string{
+		"",
+		`issuer = "https://auth.example"`,
+		`static_token_env = "TOK"`,
+		`audience = "legacy-audience"`,
+		`required_scope = "mcp:use"`,
+		`scopes = ["mcp:use"]`,
+	} {
+		t.Run(legacy, func(t *testing.T) {
+			src := strings.Replace(base, `static_token_env = "TOK"`, legacy, 1) + `
+[auth.cloudflare]
+team_domain = "https://rusty-rocket.cloudflareaccess.com"
+audience = "mcp-audience"
+`
+			_, err := Parse([]byte(src), lookup(map[string]string{"TOK": "t", "SECRET": "s"}))
+			if legacy == "" && err != nil {
+				t.Fatal(err)
+			}
+			if legacy != "" && (err == nil || !strings.Contains(err.Error(), "mutually exclusive")) {
+				t.Fatalf("must reject ambiguous auth modes, got %v", err)
+			}
+		})
+	}
+}

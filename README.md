@@ -49,11 +49,45 @@ Rows older than `audit.retention_days` are pruned daily.
 
 `/ui/` is a small operator dashboard: upstream states, RSS and breakers
 updated live, pending OAuth logins as clickable links, a tool browser with
-search per namespace, and the audit log with filters. Sign in with the
-static gateway token; the session lives in a cookie for a week. It's
-server-rendered Go templates kept live with [Datastar](https://data-star.dev)
+search per namespace, and the audit log with filters. By default, sign in
+with the static gateway token; the session lives in a cookie for a week.
+It's server-rendered Go templates kept live with [Datastar](https://data-star.dev)
 over SSE, embedded in the binary with no build step. Disable with
 `[ui] enabled = false`.
+
+To use Cloudflare Access instead, add both settings to your gateway config:
+
+```toml
+[ui.cloudflare]
+team_domain = "https://your-team.cloudflareaccess.com"
+audience = "your-access-application-aud-tag"
+```
+
+Create a self-hosted Access application for the gateway hostname scoped to
+`/ui` and its subpaths, with an Allow policy for the operator's email or group.
+Keep `/mcp/*`, OAuth discovery, and OAuth callbacks outside the browser-login
+policy. Access does not create DNS records or origin routing; the hostname
+must already reach the gateway through Cloudflare.
+
+In this mode every dashboard request, including assets and SSE connections,
+requires a `Cf-Access-Jwt-Assertion` header. The gateway checks its RS256
+signature, team issuer, application audience, and expiry using Cloudflare's
+cached, automatically refreshed signing keys. Missing or invalid assertions
+return 401, including direct-to-origin requests without an assertion.
+Plain identity headers, Access cookies alone, static bearer tokens, and old
+dashboard session cookies cannot bypass verification. There is no local
+token login or local session; logout redirects to `/cdn-cgi/access/logout`.
+MCP bearer authentication is unchanged, and the dashboard no longer requires
+a static MCP token when Cloudflare Access is configured.
+
+Both Cloudflare settings are required together, and `team_domain` must be an
+HTTPS origin without a path, query, or credentials. Omitting both retains
+the static-token login. Restrict direct origin access with Cloudflare Tunnel
+or firewall rules as well. Verification happens when each HTTP request starts;
+an already-open SSE connection is not terminated when its token expires.
+
+See [Cloudflare's JWT validation documentation](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/)
+for the team domain, application AUD, and signing-key endpoint.
 
 ## Tool discovery modes
 
@@ -149,6 +183,49 @@ The full login flow against a real Authelia runs as an integration test
 ```sh
 go test -tags integration -run TestAuthelia ./internal/auth/
 ```
+
+### Cloudflare Managed OAuth for MCP clients
+
+As an alternative to OIDC/static bearer authentication, let Cloudflare Access
+handle interactive MCP client login:
+
+```toml
+[auth.cloudflare]
+team_domain = "https://your-team.cloudflareaccess.com"
+audience = "your-mcp-access-application-aud-tag"
+```
+
+Remove `issuer`, `audience`, `required_scope`, `scopes`, and `static_token_env`
+from `[auth]` when enabling this mode; combining them is a startup error.
+The `[ui.cloudflare]` configuration is independent: use separate Access
+applications and audiences for the dashboard and MCP API.
+
+In Cloudflare Zero Trust, create a self-hosted Access application covering
+`/mcp/*` on the gateway hostname. Add destinations for `/audit` and
+`/oauth/upstream/*` too if using those authenticated management endpoints.
+Apply an Allow policy for the permitted users, then enable **Managed OAuth**
+in the application's advanced settings. Configure allowed client redirect
+URIs; enable localhost/loopback redirects for local CLI clients as needed.
+Keep `/oauth/callback` and `/oauth/client.json` outside Access protection.
+
+Clients must support OAuth resource indicators (RFC 8707). Cloudflare owns
+the OAuth challenge, discovery, registration, token exchange, and refresh.
+It resolves the client's opaque bearer token and forwards a signed
+`Cf-Access-Jwt-Assertion` to the gateway. The gateway checks the assertion's
+signature, issuer, MCP application audience, expiry, and non-empty subject;
+the subject is used for MCP session identity and audit records.
+Cloudflare's Access policy replaces the legacy `required_scope` check.
+
+The origin does not accept the client's opaque token, a raw JWT bearer,
+static token, email header, or dashboard cookie as an alternative.
+Its own protected-resource metadata is disabled in this mode to avoid
+advertising a competing OAuth flow. Cloudflare must provide discovery and
+challenges at the public hostname; do not enable this mode behind ordinary
+Access browser redirects without Managed OAuth. Restrict direct origin
+access with a Tunnel or firewall rules as well.
+
+See [Cloudflare Managed OAuth](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/managed-oauth/)
+for client prerequisites, redirect allowlists, and refresh-token settings.
 
 ## Process model
 
