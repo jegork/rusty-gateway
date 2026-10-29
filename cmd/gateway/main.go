@@ -101,7 +101,7 @@ func run(cfgPath string, log *slog.Logger) error {
 				OAuth: srv.OAuth, NoPing: !srv.PingEnabled(), StderrLevel: stderrLevel(srv.StderrLevel),
 			})
 			if srv.OAuth {
-				up := upstreamauth.Upstream{ID: id, URL: srv.URL}
+				up := upstreamauth.Upstream{ID: id, URL: srv.URL, Headers: srv.Headers}
 				if srv.OAuthClientID != "" {
 					up.Preregistered = &oauthex.ClientCredentials{ClientID: srv.OAuthClientID}
 					if srv.OAuthClientSecret != "" {
