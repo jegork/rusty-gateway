@@ -257,3 +257,25 @@ audience = "mcp-audience"
 		})
 	}
 }
+
+func TestHybridPinsRejectInvalidConfiguration(t *testing.T) {
+	base := minimal(writeExec(t))
+	for _, tc := range []struct {
+		name, settings, want string
+	}{
+		{"wrong mode", "discovery = \"search\"\npinned_tools = [\"a__echo\"]", "requires hybrid"},
+		{"default mode", "pinned_tools = [\"a__echo\"]", "requires hybrid"},
+		{"unprefixed", "discovery = \"hybrid\"\npinned_tools = [\"echo\"]", "must be server__tool"},
+		{"empty tool", "discovery = \"hybrid\"\npinned_tools = [\"a__\"]", "must be server__tool"},
+		{"excluded server", "discovery = \"hybrid\"\npinned_tools = [\"b__echo\"]", "outside the namespace"},
+		{"duplicate", "discovery = \"hybrid\"\npinned_tools = [\"a__echo\", \"a__echo\"]", "duplicate pinned tool"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := strings.Replace(base, `servers = ["a"]`, "servers = [\"a\"]\n"+tc.settings, 1)
+			_, err := Parse([]byte(src), lookup(map[string]string{"TOK": "t", "SECRET": "s"}))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want %q, got %v", tc.want, err)
+			}
+		})
+	}
+}

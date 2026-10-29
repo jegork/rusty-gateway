@@ -1,5 +1,5 @@
-// Package gateway exposes one MCP server per namespace whose tool list is the
-// union of that namespace's ready upstreams, prefixed as server__tool.
+// Package gateway exposes one MCP server per namespace with configurable
+// discovery of upstream tools, prefixed as server__tool.
 package gateway
 
 import (
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -22,9 +23,10 @@ import (
 const Separator = "__"
 
 type Namespace struct {
-	Name      string
-	Servers   []string
-	Discovery Discovery // empty means DiscoveryFull
+	Name        string
+	Servers     []string
+	Discovery   Discovery // empty means DiscoveryFull
+	PinnedTools []string
 }
 
 type Options struct {
@@ -161,8 +163,8 @@ func (g *Gateway) RefreshAll() {
 }
 
 func (g *Gateway) syncLocked(ns *nsServer) {
-	// meta-tool modes read the upstream tool cache live; nothing to register
-	if ns.ns.Discovery != "" && ns.ns.Discovery != DiscoveryFull {
+	// search and connector modes read the upstream cache without native tools
+	if ns.ns.Discovery != "" && ns.ns.Discovery != DiscoveryFull && ns.ns.Discovery != DiscoveryHybrid {
 		return
 	}
 	want := map[string]string{}
@@ -174,6 +176,9 @@ func (g *Gateway) syncLocked(ns *nsServer) {
 		}
 		for _, t := range u.Tools() {
 			name := srvName + Separator + t.Name
+			if ns.ns.Discovery == DiscoveryHybrid && !slices.Contains(ns.ns.PinnedTools, name) {
+				continue
+			}
 			pt := *t
 			pt.Name = name
 			// clients display the title, so the provenance has to be there too
