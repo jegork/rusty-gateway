@@ -87,4 +87,11 @@ call_timeout   = "120s" # overrides limits.call_timeout
 [servers.notion]
 url   = "https://mcp.notion.com/mcp"
 oauth = true
+
+# oauth upstream behind cloudflare access: headers also go on the oauth
+# discovery and token requests to the upstream's own host, never to other hosts
+# [servers.openship]
+# url     = "https://openship.example/api/mcp"
+# oauth   = true
+# headers = { CF-Access-Client-Id = "${OPENSHIP_CF_CLIENT_ID}", CF-Access-Client-Secret = "${OPENSHIP_CF_CLIENT_SECRET}" }
 # ping = false  # only for pre-2026 servers that lack ping; 2026-07-28 sessions are never pinged

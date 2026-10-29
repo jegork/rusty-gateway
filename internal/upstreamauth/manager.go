@@ -43,6 +43,9 @@ type Upstream struct {
 	URL string
 	// Preregistered, if set, is used instead of CIMD/DCR.
 	Preregistered *oauthex.ClientCredentials
+	// Headers are sent on oauth requests to the upstream's own origin, so
+	// discovery and token calls pass a gate such as cloudflare access.
+	Headers map[string]string
 }
 
 type Manager struct {
@@ -63,6 +66,7 @@ type Manager struct {
 
 type entry struct {
 	up      Upstream
+	http    *http.Client
 	handler sdkauth.OAuthHandler // nil until credentials exist
 	ready   chan struct{}        // closed when handler becomes non-nil
 
@@ -98,7 +102,7 @@ func New(publicURL string, store *Store, upstreams []Upstream, log *slog.Logger)
 		entries: map[string]*entry{},
 	}
 	for _, up := range upstreams {
-		e := &entry{up: up, ready: make(chan struct{})}
+		e := &entry{up: up, http: upstreamClient(m.http, up), ready: make(chan struct{})}
 		creds, err := store.Load(context.Background(), up.ID)
 		switch {
 		case err == nil:
@@ -151,7 +155,7 @@ func (m *Manager) Wait(ctx context.Context, id string) error {
 // goes back to needing an interactive login.
 func (m *Manager) handlerFor(e *entry, creds *Credentials) sdkauth.OAuthHandler {
 	cfg := creds.config()
-	refreshCtx := context.WithValue(context.Background(), oauth2.HTTPClient, m.http)
+	refreshCtx := context.WithValue(context.Background(), oauth2.HTTPClient, e.http)
 	h, err := sdkauth.NewAuthorizationCodeHandler(&sdkauth.AuthorizationCodeHandlerConfig{
 		PreregisteredClient: &oauthex.ClientCredentials{ClientID: creds.ClientID},
 		RedirectURL:         m.publicURL + CallbackPath,
@@ -159,7 +163,7 @@ func (m *Manager) handlerFor(e *entry, creds *Credentials) sdkauth.OAuthHandler 
 			m.invalidate(e)
 			return nil, ErrLoginRequired
 		},
-		Client:             m.http,
+		Client:             e.http,
 		InitialTokenSource: m.persisting(e, cfg, cfg.TokenSource(refreshCtx, creds.Token), creds.Token),
 	})
 	if err != nil {
@@ -315,7 +319,7 @@ func (m *Manager) StartLogin(ctx context.Context, id string) (string, error) {
 	}
 	probe.Header.Set("Content-Type", "application/json")
 	probe.Header.Set("Accept", "application/json, text/event-stream")
-	resp, err := m.http.Do(probe)
+	resp, err := e.http.Do(probe)
 	if err != nil {
 		m.clearLogin(e)
 		return "", fmt.Errorf("probe %s: %w", e.up.URL, err)
@@ -330,7 +334,7 @@ func (m *Manager) StartLogin(ctx context.Context, id string) (string, error) {
 	cfg := &sdkauth.AuthorizationCodeHandlerConfig{
 		RedirectURL:         m.publicURL + CallbackPath,
 		RequestRefreshToken: true,
-		Client:              m.http,
+		Client:              e.http,
 		AuthorizationCodeFetcher: func(ctx context.Context, args *sdkauth.AuthorizationArgs) (*sdkauth.AuthorizationResult, error) {
 			u, err := url.Parse(args.URL)
 			if err != nil {
@@ -487,4 +491,31 @@ func (m *Manager) clientMetadata() *oauthex.ClientRegistrationMetadata {
 		ResponseTypes:           []string{"code"},
 		TokenEndpointAuthMethod: "none",
 	}
+}
+
+// upstreamClient adds up.Headers to requests for the upstream's origin only:
+// the authorization server may be a third party that must not see them.
+func upstreamClient(base *http.Client, up Upstream) *http.Client {
+	u, err := url.Parse(up.URL)
+	if len(up.Headers) == 0 || err != nil {
+		return base
+	}
+	c := *base
+	c.Transport = originHeaderTransport{scheme: u.Scheme, host: u.Host, headers: up.Headers}
+	return &c
+}
+
+type originHeaderTransport struct {
+	scheme, host string
+	headers      map[string]string
+}
+
+func (t originHeaderTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Scheme == t.scheme && r.URL.Host == t.host {
+		r = r.Clone(r.Context())
+		for k, v := range t.headers {
+			r.Header.Set(k, v)
+		}
+	}
+	return http.DefaultTransport.RoundTrip(r)
 }

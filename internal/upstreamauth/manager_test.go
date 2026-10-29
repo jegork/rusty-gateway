@@ -34,6 +34,9 @@ type fakeAS struct {
 	tokenTTL time.Duration
 	clients  int
 	refreshN int
+	// gate, when set, mimics cloudflare access: server-to-server requests
+	// without these headers are redirected to a login page
+	gate map[string]string
 }
 
 func newFakeAS(t *testing.T) *fakeAS {
@@ -122,7 +125,18 @@ func newFakeAS(t *testing.T) *fakeAS {
 		}
 		mcpH.ServeHTTP(w, r)
 	})
-	f.srv = httptest.NewServer(mux)
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// /authorize is opened by the user's browser, which holds an access session
+		if r.URL.Path != "/authorize" {
+			for k, v := range f.gate {
+				if r.Header.Get(k) != v {
+					http.Redirect(w, r, "https://team.cloudflareaccess.com/cdn-cgi/access/login", http.StatusFound)
+					return
+				}
+			}
+		}
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(f.srv.Close)
 	return f
 }
@@ -149,6 +163,11 @@ type harness struct {
 
 func newHarness(t *testing.T, as *fakeAS, storePath string) *harness {
 	t.Helper()
+	return newHarnessWithHeaders(t, as, storePath, nil)
+}
+
+func newHarnessWithHeaders(t *testing.T, as *fakeAS, storePath string, headers map[string]string) *harness {
+	t.Helper()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	store, err := OpenStore(storePath)
 	if err != nil {
@@ -161,14 +180,14 @@ func newHarness(t *testing.T, as *fakeAS, storePath string) *harness {
 	mux := http.NewServeMux()
 	h.gw = httptest.NewServer(mux)
 	t.Cleanup(h.gw.Close)
-	h.mgr, err = New(h.gw.URL, store, []Upstream{{ID: "p/notion", URL: as.srv.URL + "/mcp"}}, log)
+	h.mgr, err = New(h.gw.URL, store, []Upstream{{ID: "p/notion", URL: as.srv.URL + "/mcp", Headers: headers}}, log)
 	if err != nil {
 		t.Fatal(err)
 	}
 	mux.Handle("GET "+CallbackPath, h.mgr.CallbackHandler())
 	mux.Handle("GET "+ClientMetadataPath, h.mgr.ClientMetadataHandler())
 
-	h.sup = supervisor.New([]supervisor.Spec{{ID: "p/notion", URL: as.srv.URL + "/mcp", OAuth: true}}, supervisor.Options{
+	h.sup = supervisor.New([]supervisor.Spec{{ID: "p/notion", URL: as.srv.URL + "/mcp", Headers: headers, OAuth: true}}, supervisor.Options{
 		PingInterval: 100 * time.Millisecond, StartTimeout: 5 * time.Second, BackoffMin: 20 * time.Millisecond,
 		BackoffMax: 50 * time.Millisecond, StableAfter: time.Hour, MaxFailures: 3, OAuth: h.mgr, Logger: log,
 	})
@@ -379,5 +398,73 @@ func TestReloginReplacesCredentialsAndReconnects(t *testing.T) {
 	u, _ := h.sup.Get("p/notion")
 	if _, err := u.CallTool(context.Background(), &mcp.CallToolParams{Name: "search"}); err != nil {
 		t.Fatalf("call after re-login: %v", err)
+	}
+}
+
+func TestLoginAndRefreshThroughAccessGate(t *testing.T) {
+	as := newFakeAS(t)
+	as.tokenTTL = 2 * time.Second
+	headers := map[string]string{"CF-Access-Client-Id": "id.access", "CF-Access-Client-Secret": "s3cret"}
+	as.gate = headers
+	h := newHarnessWithHeaders(t, as, t.TempDir()+"/state.db", headers)
+	h.sup.Start(context.Background())
+	defer h.sup.Stop()
+
+	authURL, err := h.mgr.StartLogin(context.Background(), "p/notion")
+	if err != nil {
+		t.Fatalf("login behind gate: %v", err)
+	}
+	browse(t, authURL)
+	waitFor(t, "ready", func() bool { return h.state() == "ready" })
+	u, _ := h.sup.Get("p/notion")
+	if _, err := u.CallTool(context.Background(), &mcp.CallToolParams{Name: "search"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "refresh through gate", func() bool {
+		as.mu.Lock()
+		defer as.mu.Unlock()
+		return as.refreshN > 0
+	})
+	if st := h.state(); st != "ready" {
+		t.Fatalf("refresh through gate dropped the session: %s", st)
+	}
+}
+
+func TestUpstreamHeadersStayOnUpstreamOrigin(t *testing.T) {
+	seen := map[string]string{}
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen[r.Host+r.URL.Path] = r.Header.Get("CF-Access-Client-Secret")
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	srvURL, _ := url.Parse(srv.URL)
+	upstream := "http://" + srvURL.Host + "/mcp"
+	c := upstreamClient(&http.Client{}, Upstream{URL: upstream, Headers: map[string]string{"CF-Access-Client-Secret": "s3cret"}})
+
+	port := srvURL.Port()
+	cases := []struct {
+		url  string
+		want string
+	}{
+		{upstream, "s3cret"},
+		{"http://" + srvURL.Host + "/token", "s3cret"},
+		// a third-party authorization server must never see the service token
+		{"http://localhost:" + port + "/token", ""},
+	}
+	for _, tc := range cases {
+		res, err := c.Get(tc.url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		u, _ := url.Parse(tc.url)
+		mu.Lock()
+		got := seen[u.Host+u.Path]
+		mu.Unlock()
+		if got != tc.want {
+			t.Errorf("%s: header %q, want %q", tc.url, got, tc.want)
+		}
 	}
 }
