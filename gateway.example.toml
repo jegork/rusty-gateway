@@ -50,7 +50,10 @@ name      = "personal"
 servers   = ["tradingview", "hevy"]
 discovery = "search"     # full (default): every server__tool
                          # connector: {server}__list_tools + {server}__call per server
-                         # search: search_tools + call_tool for the namespace
+                         # search: compact search_tools + describe_tools + call_tool
+                         # hybrid: search meta-tools plus explicit native pins
+# for hybrid, set discovery = "hybrid" above and add:
+# pinned_tools = ["hevy__get_training_summary"]
 
 [[namespace]]
 name           = "ops"

@@ -193,18 +193,27 @@ func TestUnknownNamespaceIs404AndFailedUpstreamHidesTools(t *testing.T) {
 }
 
 func TestToolsReappearAfterCrashRestart(t *testing.T) {
-	f := setup(t, []Namespace{{Name: "p", Servers: []string{"c"}}}, []supervisor.Spec{
-		spec("p/c", map[string]string{"RG_CRASH_AFTER_MS": "300", "RG_CRASH_ONCE": t.TempDir() + "/crashed"}),
-	})
-	first := f.sup.LivePIDs()[0]
-	s := f.connect(t, "p")
-	defer s.Close()
-	waitFor(t, "restart", func() bool {
-		st := f.sup.Statuses()[0]
-		return st.State == "ready" && st.PID != first
-	})
-	waitFor(t, "tools back", func() bool { return len(toolNames(t, s)) == 2 })
-	if st := f.sup.Statuses()[0]; st.Restarts != 1 || st.State != "ready" {
-		t.Errorf("%+v", st)
+	for _, mode := range []Discovery{DiscoveryFull, DiscoveryHybrid} {
+		t.Run(string(mode), func(t *testing.T) {
+			f := setup(t, []Namespace{{
+				Name: "p", Servers: []string{"c"}, Discovery: mode, PinnedTools: []string{"c__echo"},
+			}}, []supervisor.Spec{
+				spec("p/c", map[string]string{"RG_CRASH_AFTER_MS": "300", "RG_CRASH_ONCE": t.TempDir() + "/crashed"}),
+			})
+			first := f.sup.LivePIDs()[0]
+			s := f.connect(t, "p")
+			waitFor(t, "restart", func() bool {
+				st := f.sup.Statuses()[0]
+				return st.State == "ready" && st.PID != first
+			})
+			want := "c__echo,c__slow"
+			if mode == DiscoveryHybrid {
+				want = "c__echo,call_tool,describe_tools,search_tools"
+			}
+			waitFor(t, "tools back", func() bool { return strings.Join(toolNames(t, s), ",") == want })
+			if st := f.sup.Statuses()[0]; st.Restarts != 1 || st.State != "ready" {
+				t.Errorf("%+v", st)
+			}
+		})
 	}
 }

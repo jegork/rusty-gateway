@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -19,19 +20,21 @@ const (
 	// DiscoveryConnector lists {server}__list_tools and {server}__call per
 	// upstream, so a client loads only the servers it touches.
 	DiscoveryConnector Discovery = "connector"
-	// DiscoverySearch lists search_tools and call_tool for the namespace.
+	// DiscoverySearch lists search_tools, describe_tools and call_tool.
 	DiscoverySearch Discovery = "search"
+	// DiscoveryHybrid adds explicitly pinned native tools to search discovery.
+	DiscoveryHybrid Discovery = "hybrid"
 )
 
 const objectSchema = `{"type":"object"}`
 
-// toolInfo is what list_tools and search_tools return for one tool.
+// ToolInfo describes a tool; compact search results omit its input schema.
 type ToolInfo struct {
 	Name        string `json:"name"`
 	Server      string `json:"server"`
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
-	InputSchema any    `json:"inputSchema"`
+	InputSchema any    `json:"inputSchema,omitempty"`
 }
 
 func (g *Gateway) registerMetaTools(ns *nsServer) {
@@ -55,16 +58,17 @@ func (g *Gateway) registerMetaTools(ns *nsServer) {
 				InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"tool name as returned by list_tools"},"arguments":{"type":"object"}},"required":["name"]}`),
 			}, g.metaCall(ns, srv))
 		}
-	case DiscoverySearch:
+	case DiscoverySearch, DiscoveryHybrid:
 		ns.server.AddTool(&mcp.Tool{
 			Name:        "search_tools",
 			Title:       "Search tools",
-			Description: "Find tools across all servers in this namespace by keywords in name, description or parameters. Returns matches with input schemas; call one with call_tool.",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["query"]}`),
+			Description: "Find tools by keywords in name, description or parameters. Returns compact summaries without schemas. Use describe_tools for selected tools before calling call_tool. Optionally filter by server.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"server":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["query"]}`),
 		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var in struct {
-				Query string `json:"query"`
-				Limit int    `json:"limit"`
+				Query  string `json:"query"`
+				Server string `json:"server"`
+				Limit  int    `json:"limit"`
 			}
 			if err := json.Unmarshal(req.Params.Arguments, &in); err != nil {
 				return nil, fmt.Errorf("invalid arguments: %w", err)
@@ -72,12 +76,46 @@ func (g *Gateway) registerMetaTools(ns *nsServer) {
 			if in.Limit <= 0 || in.Limit > 50 {
 				in.Limit = 10
 			}
-			return jsonResult(g.search(ns, in.Query, in.Limit))
+			hits := g.search(ns, in.Query, in.Server, in.Limit)
+			for i := range hits {
+				hits[i].InputSchema = nil
+			}
+			return jsonResult(hits)
+		})
+		ns.server.AddTool(&mcp.Tool{
+			Name:        "describe_tools",
+			Title:       "Describe tools",
+			Description: "Load full input schemas for selected tools by their exact server__tool names from search_tools. Returns descriptions in requested order; unknown or unavailable tools fail the request.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"names":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":50}},"required":["names"]}`),
+		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			var in struct {
+				Names []string `json:"names"`
+			}
+			if err := json.Unmarshal(req.Params.Arguments, &in); err != nil {
+				return nil, fmt.Errorf("invalid arguments: %w", err)
+			}
+			if len(in.Names) == 0 || len(in.Names) > 50 {
+				return nil, fmt.Errorf("names must contain between 1 and 50 tool names")
+			}
+			catalog := g.toolInfos(ns, "")
+			byName := make(map[string]ToolInfo, len(catalog))
+			for _, info := range catalog {
+				byName[info.Name] = info
+			}
+			infos := make([]ToolInfo, 0, len(in.Names))
+			for _, name := range in.Names {
+				info, ok := byName[name]
+				if !ok {
+					return nil, fmt.Errorf("unknown or unavailable tool %q in namespace %s", name, ns.ns.Name)
+				}
+				infos = append(infos, info)
+			}
+			return jsonResult(infos)
 		})
 		ns.server.AddTool(&mcp.Tool{
 			Name:        "call_tool",
 			Title:       "Call tool",
-			Description: "Call a tool by its full name (server__tool) as returned by search_tools, with its arguments object.",
+			Description: "Call a tool by its full name (server__tool), with arguments matching the schema from describe_tools. Discovery is optional if you already know its schema.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"arguments":{"type":"object"}},"required":["name"]}`),
 		}, g.metaCall(ns, ""))
 	}
@@ -102,6 +140,9 @@ func (g *Gateway) metaCall(ns *nsServer, server string) mcp.ToolHandler {
 			if !ok {
 				return nil, fmt.Errorf("tool name %q must be server%stool", in.Name, Separator)
 			}
+		}
+		if !slices.Contains(ns.ns.Servers, srv) {
+			return nil, fmt.Errorf("unknown server %q in namespace %s", srv, ns.ns.Name)
 		}
 		u, ok := g.sup.Get(UpstreamID(ns.ns.Name, srv))
 		if !ok {
@@ -142,7 +183,7 @@ func (g *Gateway) Tools(namespace, query string, limit int) []ToolInfo {
 	if strings.TrimSpace(query) == "" {
 		return g.toolInfos(ns, "")
 	}
-	return g.search(ns, query, limit)
+	return g.search(ns, query, "", limit)
 }
 
 func (g *Gateway) toolInfos(ns *nsServer, server string) []ToolInfo {
@@ -164,7 +205,7 @@ func (g *Gateway) toolInfos(ns *nsServer, server string) []ToolInfo {
 
 // search ranks tools by how many query tokens hit their name, title,
 // description and parameter names, name hits counting most.
-func (g *Gateway) search(ns *nsServer, query string, limit int) []ToolInfo {
+func (g *Gateway) search(ns *nsServer, query, server string, limit int) []ToolInfo {
 	tokens := strings.Fields(strings.ToLower(query))
 	if len(tokens) == 0 {
 		return nil
@@ -174,7 +215,7 @@ func (g *Gateway) search(ns *nsServer, query string, limit int) []ToolInfo {
 		score int
 	}
 	var hits []scored
-	for _, info := range g.toolInfos(ns, "") {
+	for _, info := range g.toolInfos(ns, server) {
 		name := strings.ToLower(strings.ReplaceAll(info.Name, "_", " "))
 		title := strings.ToLower(info.Title)
 		desc := strings.ToLower(info.Description)
