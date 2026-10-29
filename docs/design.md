@@ -38,7 +38,7 @@ The decisive simplification is **dropping multi-tenancy**. MetaMCP allocates per
 - Being an OAuth **authorization server** (issuing tokens, consent screens, DCR)
 - An admin web UI — config is a file in git
 - A custom inspector — the official `@modelcontextprotocol/inspector` already points at any endpoint
-- Tool discovery modes beyond the full merged list (tracked in issue #2)
+- Semantic tool search and automatic discovery-mode selection
 
 ---
 

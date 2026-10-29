@@ -98,9 +98,56 @@ Each namespace picks how clients see its tools with `discovery`:
 - `connector`: two meta-tools per server, `{server}__list_tools` and
   `{server}__call`. The client loads a server's real tools only when it
   needs that server.
-- `search`: two meta-tools for the whole namespace, `search_tools(query)`
-  and `call_tool(name, arguments)`. Search matches keywords against tool
-  names, titles, descriptions and parameter names and returns schemas.
+- `search`: three meta-tools for the whole namespace:
+  - `search_tools(query, server?, limit?)` returns compact summaries (name,
+    server, title and description), without input schemas. Keywords match
+    names, titles, descriptions and parameter names. The optional `server`
+    filter is exact; `limit` defaults to 10, with a maximum of 50.
+  - `describe_tools(names)` returns full input schemas for 1–50 selected
+    `server__tool` names in request order. Unknown or unavailable names fail
+    the whole request rather than returning partial results.
+  - `call_tool(name, arguments)` executes a tool by its `server__tool` name.
+- `hybrid`: the same three meta-tools plus the native schemas of explicitly
+  configured `pinned_tools`. Unpinned tools remain searchable, describable
+  and callable through the meta-tools; there is no automatic promotion.
+
+Use `search` for large mixed catalogs, `hybrid` when a few tools dominate
+your workflow, and `full` for small catalogs or clients that need native
+tools. `connector` suits workflows that already know which server to use,
+but listing a server still returns every schema from that server.
+
+```toml
+[[namespace]]
+name = "personal"
+servers = ["hevy", "renpho", "notion", "tradingview"]
+discovery = "hybrid"
+pinned_tools = [
+  "hevy__get_training_summary",
+  "renpho__get_latest_measurement",
+]
+```
+
+Pins must be unique `server__tool` names belonging to a server in the
+namespace, and are only accepted with `hybrid`. Tool existence is checked
+against the live upstream catalog: a missing or unavailable pin is not
+advertised, and appears when the upstream reports it as available.
+
+Typical discovery flow:
+
+```text
+search_tools({"query":"recent workouts","server":"hevy","limit":3})
+describe_tools({"names":["hevy__get_workouts"]})
+call_tool({"name":"hevy__get_workouts","arguments":{...}})
+```
+
+Discovery is not an authorization gate: a known tool can be called without
+searching or describing it first, but it must belong to the namespace and
+be available. Pinned native tools follow the same execution path.
+
+Upgrading from the earlier `search` contract: search results no longer
+include `inputSchema`; load selected schemas with `describe_tools`.
+Reconnect clients to refresh their advertised tool list. `full` and
+`connector` are unchanged.
 
 Meta-tool calls go through the same dispatcher, so limits, timeouts, the
 breaker and the audit log apply, and audit rows record the resolved server

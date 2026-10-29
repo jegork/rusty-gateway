@@ -114,11 +114,12 @@ type Namespace struct {
 	Name          string   `toml:"name"`
 	Servers       []string `toml:"servers"`
 	MaxConcurrent int      `toml:"max_concurrent"` // overrides limits.max_concurrent_per_namespace
-	// Discovery is full (default), connector, or search.
-	Discovery string `toml:"discovery"`
+	// discovery is full (default), connector, search, or hybrid
+	Discovery   string   `toml:"discovery"`
+	PinnedTools []string `toml:"pinned_tools"`
 }
 
-var discoveryModes = map[string]bool{"": true, "full": true, "connector": true, "search": true}
+var discoveryModes = map[string]bool{"": true, "full": true, "connector": true, "search": true, "hybrid": true}
 
 // Server_ is an upstream MCP server: either a stdio command or a remote
 // streamable HTTP url. The trailing underscore avoids clashing with the
@@ -307,7 +308,32 @@ func (c *Config) validate() error {
 			errs = append(errs, fmt.Errorf("namespace %q: negative max_concurrent", ns.Name))
 		}
 		if !discoveryModes[ns.Discovery] {
-			errs = append(errs, fmt.Errorf("namespace %q: discovery must be full, connector or search", ns.Name))
+			errs = append(errs, fmt.Errorf("namespace %q: discovery must be full, connector, search or hybrid", ns.Name))
+		}
+		if len(ns.PinnedTools) > 0 && ns.Discovery != "hybrid" {
+			errs = append(errs, fmt.Errorf("namespace %q: pinned_tools requires hybrid discovery", ns.Name))
+		}
+		pins := make(map[string]bool, len(ns.PinnedTools))
+		for _, name := range ns.PinnedTools {
+			server, tool, ok := strings.Cut(name, "__")
+			if !ok || tool == "" {
+				errs = append(errs, fmt.Errorf("namespace %q: pinned tool %q must be server__tool", ns.Name, name))
+			} else {
+				found := false
+				for _, s := range ns.Servers {
+					if s == server {
+						found = true
+						break
+					}
+				}
+				if !found {
+					errs = append(errs, fmt.Errorf("namespace %q: pinned tool %q references a server outside the namespace", ns.Name, name))
+				}
+			}
+			if pins[name] {
+				errs = append(errs, fmt.Errorf("namespace %q: duplicate pinned tool %q", ns.Name, name))
+			}
+			pins[name] = true
 		}
 		if len(ns.Servers) == 0 {
 			errs = append(errs, fmt.Errorf("namespace %q: no servers", ns.Name))

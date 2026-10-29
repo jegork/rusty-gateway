@@ -78,7 +78,7 @@ func TestSearchDiscovery(t *testing.T) {
 		spec("p/hevy", map[string]string{"RG_TOOLS": "workouts"}),
 	})
 	s := f.connect(t, "p")
-	if got := strings.Join(toolNames(t, s), ","); got != "call_tool,search_tools" {
+	if got := strings.Join(toolNames(t, s), ","); got != "call_tool,describe_tools,search_tools" {
 		t.Fatalf("search tools: %s", got)
 	}
 	search := func(q string) []string {
@@ -87,10 +87,15 @@ func TestSearchDiscovery(t *testing.T) {
 			t.Fatal(err)
 		}
 		var infos []ToolInfo
-		json.Unmarshal([]byte(out), &infos)
+		if err := json.Unmarshal([]byte(out), &infos); err != nil {
+			t.Fatal(err)
+		}
 		var names []string
 		for _, i := range infos {
 			names = append(names, i.Name)
+			if i.InputSchema != nil {
+				t.Errorf("search must not load schemas: %+v", i)
+			}
 		}
 		return names
 	}
@@ -111,7 +116,40 @@ func TestSearchDiscovery(t *testing.T) {
 		t.Errorf("empty query should be empty: %v", got)
 	}
 
-	out, err := callJSON(t, s, "call_tool", map[string]any{"name": "hevy__echo", "arguments": map[string]any{"a": "b"}})
+	out, err := callJSON(t, s, "search_tools", map[string]any{"query": "echo", "server": "tv", "limit": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var infos []ToolInfo
+	if err := json.Unmarshal([]byte(out), &infos); err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 || infos[0].Name != "tv__echo" || infos[0].Server != "tv" {
+		t.Fatalf("server-filtered search: %s", out)
+	}
+	out, err = callJSON(t, s, "describe_tools", map[string]any{"names": []string{"hevy__workouts", "tv__quote"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(out), &infos); err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 2 || infos[0].Name != "hevy__workouts" || infos[1].Name != "tv__quote" {
+		t.Fatalf("descriptions must preserve selection order: %s", out)
+	}
+	for _, info := range infos {
+		schema, _ := json.Marshal(info.InputSchema)
+		if string(schema) != `{"type":"object"}` {
+			t.Errorf("missing upstream schema for %s: %s", info.Name, schema)
+		}
+	}
+	for _, names := range [][]string{nil, {"echo"}, {"tv__missing"}, {"other__echo"}, {"tv__quote", "other__echo"}} {
+		if _, err := callJSON(t, s, "describe_tools", map[string]any{"names": names}); err == nil {
+			t.Errorf("invalid selection must fail: %v", names)
+		}
+	}
+
+	out, err = callJSON(t, s, "call_tool", map[string]any{"name": "hevy__echo", "arguments": map[string]any{"a": "b"}})
 	if err != nil || out != `{"a":"b"}` {
 		t.Fatalf("call_tool: %v %q", err, out)
 	}
@@ -121,5 +159,63 @@ func TestSearchDiscovery(t *testing.T) {
 	}
 	if _, err := callJSON(t, s, "call_tool", map[string]any{"name": "echo"}); err == nil {
 		t.Error("unprefixed name must be rejected")
+	}
+}
+
+func TestHybridDiscovery(t *testing.T) {
+	f := setup(t, []Namespace{{
+		Name: "p", Servers: []string{"tv", "hevy", "broken"}, Discovery: DiscoveryHybrid,
+		PinnedTools: []string{"tv__echo", "broken__echo", "tv__missing"},
+	}}, []supervisor.Spec{
+		spec("p/tv", map[string]string{"RG_TOOLS": "quote"}),
+		spec("p/hevy", nil),
+		spec("p/broken", map[string]string{"RG_FAIL_START": "1"}),
+		spec("p/excluded", nil),
+	})
+	s := f.connect(t, "p")
+	if got := strings.Join(toolNames(t, s), ","); got != "call_tool,describe_tools,search_tools,tv__echo" {
+		t.Fatalf("only available pins should be native: %s", got)
+	}
+	for _, name := range []string{"tv__echo", "call_tool"} {
+		args := map[string]any{"value": "same"}
+		if name == "call_tool" {
+			args = map[string]any{"name": "tv__echo", "arguments": args}
+		}
+		out, err := callJSON(t, s, name, args)
+		if err != nil || out != `{"value":"same"}` {
+			t.Fatalf("%s: %q, %v", name, out, err)
+		}
+		c := <-f.calls
+		if c.Server != "tv" || c.Tool != "echo" || string(c.Args) != `{"value":"same"}` {
+			t.Fatalf("resolved dispatch: %+v", c)
+		}
+	}
+	out, err := callJSON(t, s, "search_tools", map[string]any{"query": "quote"})
+	if err != nil || !strings.Contains(out, `"name":"tv__quote"`) || strings.Contains(out, "inputSchema") {
+		t.Fatalf("unpinned search: %s, %v", out, err)
+	}
+	out, err = callJSON(t, s, "describe_tools", map[string]any{"names": []string{"tv__quote"}})
+	if err != nil || !strings.Contains(out, `"inputSchema":{"type":"object"}`) {
+		t.Fatalf("unpinned description: %s, %v", out, err)
+	}
+	out, err = callJSON(t, s, "call_tool", map[string]any{"name": "tv__quote", "arguments": map[string]any{"symbol": "AAPL"}})
+	if err != nil || out != `{"symbol":"AAPL"}` {
+		t.Fatalf("unpinned call: %s, %v", out, err)
+	}
+	<-f.calls
+	for _, name := range []string{"broken__echo", "tv__missing", "excluded__echo", "other__echo"} {
+		if _, err := callJSON(t, s, "call_tool", map[string]any{"name": name}); err == nil {
+			t.Errorf("unavailable or excluded call must fail: %s", name)
+		}
+		if _, err := callJSON(t, s, "describe_tools", map[string]any{"names": []string{name}}); err == nil {
+			t.Errorf("unavailable or excluded description must fail: %s", name)
+		}
+	}
+	out, err = callJSON(t, s, "search_tools", map[string]any{"query": "echo", "server": "excluded"})
+	if err != nil || out != "[]" {
+		t.Fatalf("excluded search must be empty: %s, %v", out, err)
+	}
+	if _, err := callJSON(t, s, "tv__quote", nil); err == nil {
+		t.Fatal("unpinned tools must not be native")
 	}
 }

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+* add hybrid discovery with explicitly pinned native tools alongside search meta-tools
+* add server-filtered compact tool search and selective schema loading through `describe_tools`
+
+### Breaking Changes
+
+* `search_tools` no longer returns input schemas; clients must use `describe_tools` for selected tools
+
 ## [0.2.0](https://github.com/jegork/rusty-gateway/compare/v0.1.0...v0.2.0) (2026-09-08)
 
 
