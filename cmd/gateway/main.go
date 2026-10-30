@@ -15,6 +15,7 @@ import (
 
 	"github.com/jegork/rusty-gateway/internal/audit"
 	"github.com/jegork/rusty-gateway/internal/auth"
+	"github.com/jegork/rusty-gateway/internal/codemode"
 	"github.com/jegork/rusty-gateway/internal/config"
 	"github.com/jegork/rusty-gateway/internal/gateway"
 	"github.com/jegork/rusty-gateway/internal/supervisor"
@@ -89,9 +90,20 @@ func run(cfgPath string, log *slog.Logger) error {
 		NamespaceConcurrency: map[string]int{}, ServerConcurrency: map[string]int{}, ServerTimeout: map[string]time.Duration{},
 	}
 	for _, ns := range cfg.Namespaces {
-		namespaces = append(namespaces, gateway.Namespace{
+		namespace := gateway.Namespace{
 			Name: ns.Name, Servers: ns.Servers, Discovery: gateway.Discovery(ns.Discovery), PinnedTools: ns.PinnedTools,
-		})
+		}
+		if ns.CodeMode != nil && ns.CodeMode.On() {
+			mode := ns.CodeMode
+			namespace.CodeMode = &gateway.CodeMode{
+				AllowedTools: mode.AllowedTools, MaxConcurrent: mode.MaxConcurrent,
+				Limits: codemode.Limits{
+					Timeout: mode.Timeout.Duration, MemoryMB: mode.MemoryMB, MaxCalls: mode.MaxCalls,
+					MaxOutputBytes: mode.MaxOutputBytes, MaxCodeBytes: mode.MaxCodeBytes,
+				},
+			}
+		}
+		namespaces = append(namespaces, namespace)
 		limits.NamespaceConcurrency[ns.Name] = ns.MaxConcurrent
 		for _, name := range ns.Servers {
 			srv := cfg.Servers[name]

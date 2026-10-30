@@ -153,6 +153,101 @@ Meta-tool calls go through the same dispatcher, so limits, timeouts, the
 breaker and the audit log apply, and audit rows record the resolved server
 and tool rather than the meta-tool.
 
+## Code mode
+
+Code mode is disabled by default and works alongside any discovery mode.
+Enable it per namespace with an explicit allowlist of tools that scripts may
+invoke:
+
+```toml
+[[namespace]]
+name = "personal"
+servers = ["hevy", "renpho"]
+discovery = "search"
+
+[namespace.code_mode]
+enabled = true
+allowed_tools = ["hevy__get_workouts", "renpho__get_latest_measurement"]
+timeout = "10s"
+memory_mb = 32
+max_calls = 20
+max_output_bytes = 65536
+max_code_bytes = 65536
+max_concurrent = 1
+```
+
+This advertises `execute_code({code})`. Supply a JavaScript async function
+body, with `return` for its JSON result:
+
+```js
+const workouts = await tools.call("hevy__get_workouts", {page: 1, pageSize: 5});
+const measurement = await tools.call("renpho__get_latest_measurement", {});
+return {
+  workouts: workouts.structuredContent ?? workouts.content,
+  measurement: measurement.structuredContent ?? measurement.content,
+};
+```
+
+`tools.call(name, arguments)` returns the **full MCP tool result**, including
+`content` and optional `structuredContent`. Decode text content as JSON only
+when that tool's contract says it contains JSON. Transport failures and
+upstream tool errors throw JavaScript errors; scripts can catch them.
+The final response is `{"result": <returned JSON value>}`. An omitted return
+becomes `null`; non-serializable results and failed executions produce MCP
+tool errors without invalidating the client session.
+Error envelopes must also fit `max_output_bytes`. If an error cannot fit,
+execution aborts rather than delivering an oversized error to JavaScript.
+
+Use discovery to inspect tools before writing code. The allowlist is
+independent of discovery and pinned tools, uses exact `server__tool` names,
+and must contain at least one tool when enabled. Names must be unique and
+refer to servers in the namespace; wildcards and recursive meta-tool
+execution are not supported.
+
+**An approval for `execute_code` is not a separate approval for each inner
+call.** Only allow tools you trust for scripted use; start with read-only
+tools. Read-only safety is an operator decision, not inferred from names or
+upstream annotations. Tools outside the code-mode allowlist remain available
+through their normal discovery/call paths.
+
+### Isolation and limits
+
+Each execution gets a fresh QuickJS WebAssembly instance hosted by
+[wazero](https://wazero.io/), embedded in the Go binary. No Node, Bun, Deno,
+external worker service, or C toolchain is needed. Scripts get JavaScript,
+Promises and `tools.call`, not TypeScript, package installation, or host
+filesystem/environment/network/process access. Internal QuickJS modules do
+not grant host capabilities: WASI has no mounted files or inherited
+environment, and process/network operations are unavailable. Wall and
+monotonic clocks are provided so dates are useful.
+
+The table above shows the defaults; omitted or zero bounds select those
+defaults. `memory_mb` accepts 2–256 MiB and caps the VM's linear memory
+(including its JavaScript heap), not the gateway's total Go heap.
+`max_code_bytes` bounds source bytes; `max_output_bytes` bounds the serialized
+returned JSON value and each tool-result envelope crossing into JavaScript,
+not the full MCP wire response. Upstream responses and Go-side JSON encoding
+still use gateway memory before the result-size check; this is not a
+process-wide memory limit.
+
+The execution deadline includes capacity wait, startup, JavaScript,
+serialization and upstream calls. A runaway loop or pending Promise closes
+the instance at the deadline. `max_concurrent` bounds live instances per
+namespace independently of upstream call limits. Inner calls remain
+sequential even with `Promise.all`; each uses the normal namespace/server
+limits, breaker and resolved-tool audit path. The source program itself is
+not added to the tool-call audit log.
+
+Executions are **not transactions**: completed calls remain applied if a
+later call, serialization, or deadline fails. The gateway does not retry a
+script or its calls; do not blindly retry writes after an ambiguous timeout.
+VM state is discarded on completion or failure.
+
+The embedded artifact is pinned; its source revision, checksum, build
+instructions and third-party notices are in
+[`internal/codemode/quickjs.LICENSE`](internal/codemode/quickjs.LICENSE), also
+included in release archives and container images.
+
 ## Logging
 
 The gateway logs JSON to stderr. Each upstream's stderr is captured line by

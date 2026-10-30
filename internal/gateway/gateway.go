@@ -27,6 +27,7 @@ type Namespace struct {
 	Servers     []string
 	Discovery   Discovery // empty means DiscoveryFull
 	PinnedTools []string
+	CodeMode    *CodeMode
 }
 
 type Options struct {
@@ -95,6 +96,7 @@ func New(sup *supervisor.Supervisor, namespaces []Namespace, opts Options) *Gate
 		}
 		g.servers[ns.Name].server.AddReceivingMiddleware(requestLogger(nsLog))
 		g.registerMetaTools(g.servers[ns.Name])
+		g.registerCodeMode(g.servers[ns.Name])
 		for _, srv := range ns.Servers {
 			id := UpstreamID(ns.Name, srv)
 			g.perSrv[id] = newSemaphore(opts.Limits.serverLimit(id))

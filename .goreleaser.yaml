@@ -11,7 +11,7 @@ builds:
 archives:
   - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    files: [README.md, gateway.example.toml]
+    files: [README.md, gateway.example.toml, internal/codemode/quickjs.LICENSE]
 checksum:
   name_template: checksums.txt
 changelog:
