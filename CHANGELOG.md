@@ -7,6 +7,9 @@
 * add hybrid discovery with explicitly pinned native tools alongside search meta-tools
 * add server-filtered compact tool search and selective schema loading through `describe_tools`
 * add opt-in JavaScript code mode in a bounded, stateless WebAssembly sandbox with exact tool allowlisting and shared audited dispatch
+* add optional per-server `description` metadata, shown as a stable, mode-aware capability overview in server instructions and discovery tool descriptions
+* add live paginated `list_tools` browsing for search, hybrid and code-mode namespaces, with stateless keyset cursors
+* report `code_mode_allowed` in list, search, describe and connector listings so discovery agrees with the code-mode allowlist
 
 ### Breaking Changes
 

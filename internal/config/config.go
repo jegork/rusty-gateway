@@ -160,11 +160,14 @@ var discoveryModes = map[string]bool{"": true, "full": true, "connector": true, 
 // streamable HTTP url. The trailing underscore avoids clashing with the
 // [server] listen block.
 type Server_ struct {
-	Command string            `toml:"command"`
-	Args    []string          `toml:"args"`
-	Env     map[string]string `toml:"env"`
-	URL     string            `toml:"url"`
-	Headers map[string]string `toml:"headers"`
+	// optional operator-written summary shown to clients in the namespace
+	// overview; never inferred from tool names
+	Description string            `toml:"description"`
+	Command     string            `toml:"command"`
+	Args        []string          `toml:"args"`
+	Env         map[string]string `toml:"env"`
+	URL         string            `toml:"url"`
+	Headers     map[string]string `toml:"headers"`
 	// OAuth makes the gateway obtain bearer tokens for this url server
 	// through an interactive login; optional pre-registered client.
 	OAuth                bool   `toml:"oauth"`

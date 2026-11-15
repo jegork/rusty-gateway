@@ -1,9 +1,13 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"sort"
 	"strings"
@@ -20,7 +24,7 @@ const (
 	// DiscoveryConnector lists {server}__list_tools and {server}__call per
 	// upstream, so a client loads only the servers it touches.
 	DiscoveryConnector Discovery = "connector"
-	// DiscoverySearch lists search_tools, describe_tools and call_tool.
+	// DiscoverySearch lists list_tools, search_tools, describe_tools and call_tool.
 	DiscoverySearch Discovery = "search"
 	// DiscoveryHybrid adds explicitly pinned native tools to search discovery.
 	DiscoveryHybrid Discovery = "hybrid"
@@ -29,12 +33,87 @@ const (
 const objectSchema = `{"type":"object"}`
 
 // ToolInfo describes a tool; compact search results omit its input schema.
+// code_mode_allowed only says whether execute_code may call the tool; it does
+// not change whether the tool can be called normally.
 type ToolInfo struct {
-	Name        string `json:"name"`
-	Server      string `json:"server"`
-	Title       string `json:"title,omitempty"`
-	Description string `json:"description,omitempty"`
-	InputSchema any    `json:"inputSchema,omitempty"`
+	Name            string `json:"name"`
+	Server          string `json:"server"`
+	Title           string `json:"title,omitempty"`
+	Description     string `json:"description,omitempty"`
+	InputSchema     any    `json:"inputSchema,omitempty"`
+	CodeModeAllowed bool   `json:"code_mode_allowed"`
+}
+
+const (
+	defaultListLimit = 10
+	maxListLimit     = 50
+	maxCursorBytes   = 1024
+	cursorVersion    = 1
+)
+
+// hasListTools reports whether the namespace exposes the list_tools browser:
+// always with search wrappers, and with code mode so scripts can find names.
+func hasListTools(ns Namespace) bool {
+	return ns.Discovery == DiscoverySearch || ns.Discovery == DiscoveryHybrid || ns.CodeMode != nil
+}
+
+// overview lists the configured servers of a namespace with their configured
+// descriptions. It is static so tool definitions stay stable across refreshes.
+func overview(ns Namespace) string {
+	var b strings.Builder
+	b.WriteString("Configured integrations in this namespace (live availability may vary):")
+	for _, srv := range ns.Servers {
+		b.WriteString("\n- " + srv)
+		if desc := strings.Join(strings.Fields(ns.ServerDescriptions[srv]), " "); desc != "" {
+			b.WriteString(": " + desc)
+		}
+	}
+	return b.String()
+}
+
+// workflow names only the tools this namespace actually exposes, so clients
+// are never pointed at wrappers that are absent in their discovery mode.
+func workflow(ns Namespace) string {
+	if !hasListTools(ns) {
+		return ""
+	}
+	var steps []string
+	switch ns.Discovery {
+	case DiscoverySearch, DiscoveryHybrid:
+		steps = []string{
+			"Find tools with list_tools (browse) or search_tools (keyword search).",
+			"Load the schemas of the exact returned names with describe_tools.",
+			"Call a tool with call_tool.",
+		}
+	case DiscoveryConnector:
+		steps = []string{
+			"Find tools with list_tools.",
+			"Load the schemas of one server with {server}" + Separator + "list_tools.",
+			"Call a tool with {server}" + Separator + "call. Use the bare upstream tool name, not the server" + Separator + "tool name.",
+		}
+	default:
+		steps = []string{
+			"Find tools with list_tools.",
+			"Call the native server" + Separator + "tool tool. Its schema is in the tool list.",
+		}
+	}
+	if ns.CodeMode != nil {
+		steps = append(steps, "Optional: call tools that have code_mode_allowed true from execute_code. Use the full server"+Separator+
+			"tool name. tools.call returns the full MCP result, not only the payload.")
+	}
+	var b strings.Builder
+	b.WriteString("Workflow:")
+	for i, step := range steps {
+		fmt.Fprintf(&b, "\n%d. %s", i+1, step)
+	}
+	return b.String()
+}
+
+func instructions(ns Namespace) string {
+	if w := workflow(ns); w != "" {
+		return overview(ns) + "\n\n" + w
+	}
+	return overview(ns)
 }
 
 func (g *Gateway) registerMetaTools(ns *nsServer) {
@@ -62,7 +141,7 @@ func (g *Gateway) registerMetaTools(ns *nsServer) {
 		ns.server.AddTool(&mcp.Tool{
 			Name:        "search_tools",
 			Title:       "Search tools",
-			Description: "Find tools by keywords in name, description or parameters. Returns compact summaries without schemas. Use describe_tools for selected tools before calling call_tool. Optionally filter by server.",
+			Description: "Find tools by keywords in name, description or parameters. Returns compact summaries without schemas. Use describe_tools for selected tools before calling call_tool. Optionally filter by server.\n\n" + instructions(ns.ns),
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"server":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["query"]}`),
 		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var in struct {
@@ -119,6 +198,119 @@ func (g *Gateway) registerMetaTools(ns *nsServer) {
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"arguments":{"type":"object"}},"required":["name"]}`),
 		}, g.metaCall(ns, ""))
 	}
+	if hasListTools(ns.ns) {
+		g.registerListTools(ns)
+	}
+}
+
+// listPage is one page of list_tools; NextCursor is empty on the last page.
+type listPage struct {
+	Tools      []ToolInfo `json:"tools"`
+	NextCursor string     `json:"next_cursor,omitempty"`
+}
+
+// listCursor is a keyset position: the last full tool name returned, bound to
+// the namespace and server filter it was issued for.
+type listCursor struct {
+	Version   int    `json:"v"`
+	Namespace string `json:"ns"`
+	Server    string `json:"server"`
+	After     string `json:"after"`
+}
+
+var errInvalidCursor = errors.New("invalid cursor: pass next_cursor unchanged with the same server filter, or omit it to start over")
+
+func encodeCursor(c listCursor) string {
+	raw, _ := json.Marshal(c)
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func decodeCursor(cursor, namespace, server string) (string, error) {
+	if len(cursor) > maxCursorBytes {
+		return "", errInvalidCursor
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return "", errInvalidCursor
+	}
+	var c listCursor
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
+		return "", errInvalidCursor
+	}
+	// dec.More() misses a trailing closing token, so require a clean EOF instead
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return "", errInvalidCursor
+	}
+	if c.Version != cursorVersion || c.Namespace != namespace || c.Server != server || c.After == "" {
+		return "", errInvalidCursor
+	}
+	return c.After, nil
+}
+
+func eligibilityNote(ns Namespace) string {
+	if ns.CodeMode == nil {
+		return "Code mode is off in this namespace, so code_mode_allowed is always false."
+	}
+	return "code_mode_allowed true means that execute_code can call the tool. It does not change normal calls."
+}
+
+func (g *Gateway) registerListTools(ns *nsServer) {
+	ns.server.AddTool(&mcp.Tool{
+		Name:  "list_tools",
+		Title: "List tools",
+		Description: fmt.Sprintf("Browse the ready upstream tools of this namespace. "+
+			"The result is compact summaries without input schemas, sorted by full name. "+
+			"Use server to filter by one server. limit defaults to %d. The maximum is %d. "+
+			"To get the next page, pass next_cursor as cursor with the same server. "+
+			"The listing is live. Tools added before the cursor appear only when you start again without a cursor. %s\n\n%s",
+			defaultListLimit, maxListLimit, eligibilityNote(ns.ns), instructions(ns.ns)),
+		InputSchema: json.RawMessage(fmt.Sprintf(`{"type":"object","properties":{"server":{"type":"string"},"cursor":{"type":"string","description":"next_cursor from a previous page"},"limit":{"type":"integer","minimum":0,"maximum":%d}}}`, maxListLimit)),
+	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var in struct {
+			Server string `json:"server"`
+			Cursor string `json:"cursor"`
+			Limit  int    `json:"limit"`
+		}
+		if len(req.Params.Arguments) > 0 {
+			if err := json.Unmarshal(req.Params.Arguments, &in); err != nil {
+				return nil, fmt.Errorf("invalid arguments: %w", err)
+			}
+		}
+		if in.Limit < 0 || in.Limit > maxListLimit {
+			return nil, fmt.Errorf("limit must be between 0 and %d, got %d", maxListLimit, in.Limit)
+		}
+		if in.Limit == 0 {
+			in.Limit = defaultListLimit
+		}
+		if in.Server != "" && !slices.Contains(ns.ns.Servers, in.Server) {
+			return nil, fmt.Errorf("unknown server %q in namespace %s", in.Server, ns.ns.Name)
+		}
+		after := ""
+		if in.Cursor != "" {
+			var err error
+			if after, err = decodeCursor(in.Cursor, ns.ns.Name, in.Server); err != nil {
+				return nil, err
+			}
+		}
+		infos := g.toolInfos(ns, in.Server)
+		sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
+		page := listPage{Tools: infos[sort.Search(len(infos), func(i int) bool { return infos[i].Name > after }):]}
+		if len(page.Tools) > in.Limit {
+			page.Tools = page.Tools[:in.Limit]
+			page.NextCursor = encodeCursor(listCursor{
+				Version: cursorVersion, Namespace: ns.ns.Name, Server: in.Server, After: page.Tools[len(page.Tools)-1].Name,
+			})
+		}
+		if page.Tools == nil {
+			page.Tools = []ToolInfo{}
+		}
+		for i := range page.Tools {
+			page.Tools[i].InputSchema = nil
+		}
+		return jsonResult(page)
+	})
 }
 
 // metaCall resolves a name to an upstream tool and dispatches it like a
@@ -197,7 +389,11 @@ func (g *Gateway) toolInfos(ns *nsServer, server string) []ToolInfo {
 			continue
 		}
 		for _, t := range u.Tools() {
-			out = append(out, ToolInfo{Name: srv + Separator + t.Name, Server: srv, Title: displayTitle(t), Description: t.Description, InputSchema: t.InputSchema})
+			name := srv + Separator + t.Name
+			out = append(out, ToolInfo{
+				Name: name, Server: srv, Title: displayTitle(t), Description: t.Description, InputSchema: t.InputSchema,
+				CodeModeAllowed: ns.ns.CodeMode != nil && slices.Contains(ns.ns.CodeMode.AllowedTools, name),
+			})
 		}
 	}
 	return out

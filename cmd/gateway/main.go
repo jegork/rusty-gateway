@@ -92,6 +92,7 @@ func run(cfgPath string, log *slog.Logger) error {
 	for _, ns := range cfg.Namespaces {
 		namespace := gateway.Namespace{
 			Name: ns.Name, Servers: ns.Servers, Discovery: gateway.Discovery(ns.Discovery), PinnedTools: ns.PinnedTools,
+			ServerDescriptions: map[string]string{},
 		}
 		if ns.CodeMode != nil && ns.CodeMode.On() {
 			mode := ns.CodeMode
@@ -103,10 +104,12 @@ func run(cfgPath string, log *slog.Logger) error {
 				},
 			}
 		}
-		namespaces = append(namespaces, namespace)
 		limits.NamespaceConcurrency[ns.Name] = ns.MaxConcurrent
 		for _, name := range ns.Servers {
 			srv := cfg.Servers[name]
+			if srv.Description != "" {
+				namespace.ServerDescriptions[name] = srv.Description
+			}
 			id := gateway.UpstreamID(ns.Name, name)
 			specs = append(specs, supervisor.Spec{
 				ID: id, Command: srv.Command, Args: srv.Args, Env: srv.Env, URL: srv.URL, Headers: srv.Headers,
@@ -125,6 +128,7 @@ func run(cfgPath string, log *slog.Logger) error {
 			limits.ServerConcurrency[id] = srv.MaxConcurrent
 			limits.ServerTimeout[id] = srv.CallTimeout.Duration
 		}
+		namespaces = append(namespaces, namespace)
 	}
 
 	var ua *upstreamauth.Manager

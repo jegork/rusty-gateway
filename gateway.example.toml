@@ -50,15 +50,16 @@ name      = "personal"
 servers   = ["tradingview", "hevy"]
 discovery = "search"     # full (default): every server__tool
                          # connector: {server}__list_tools + {server}__call per server
-                         # search: compact search_tools + describe_tools + call_tool
+                         # search: list_tools + search_tools + describe_tools + call_tool
                          # hybrid: search meta-tools plus explicit native pins
 # for hybrid, set discovery = "hybrid" above and add:
-# pinned_tools = ["hevy__get_training_summary"]
+# pinned_tools = ["hevy__get-training-summary"]
 
-# opt-in JavaScript orchestration; allow only tools trusted for scripted use
+# opt-in JavaScript orchestration; allow only tools trusted for scripted use.
+# also exposes list_tools, which marks these tools with code_mode_allowed
 # [namespace.code_mode]
 # enabled = true
-# allowed_tools = ["hevy__get_training_summary"]
+# allowed_tools = ["hevy__get-training-summary"]
 # timeout = "10s"
 # memory_mb = 32             # per VM, 2–256 MiB; not a process-wide limit
 # max_calls = 20
@@ -71,16 +72,21 @@ name           = "ops"
 servers        = ["dokploy", "remote-example"]
 max_concurrent = 4          # overrides limits.max_concurrent_per_namespace
 
+# description is optional and shown to clients in the namespace overview;
+# it describes the integration, it does not approve any tool
 [servers.tradingview]
+description = "TradingView market data"
 command = "/usr/local/bin/uvx"
 args    = ["--from", "tradingview-mcp-server", "tradingview-mcp"]
 env     = { UV_CACHE_DIR = "/var/cache/uv", MARKETAUX_API_TOKEN = "${MARKETAUX_API_TOKEN}" }
 
 [servers.hevy]
+description = "Hevy strength training log: workouts and training summaries"
 command = "/usr/local/bin/hevy-mcp"
 env     = { HEVY_API_KEY = "${HEVY_API_KEY}" }
 
 [servers.dokploy]
+description = "Dokploy deployment management"
 command = "/usr/local/bin/dokploy-mcp"
 env     = { DOKPLOY_URL = "${DOKPLOY_URL}", DOKPLOY_API_KEY = "${DOKPLOY_API_KEY}" }
 
@@ -99,6 +105,7 @@ call_timeout   = "120s" # overrides limits.call_timeout
 # document, falling back to dynamic registration; set oauth_client_id (and
 # oauth_client_secret_env) for servers that require a pre-registered client.
 [servers.notion]
+description = "Notion workspace pages and databases"
 url   = "https://mcp.notion.com/mcp"
 oauth = true
 

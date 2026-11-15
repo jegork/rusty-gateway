@@ -208,7 +208,7 @@ func TestToolsReappearAfterCrashRestart(t *testing.T) {
 			})
 			want := "c__echo,c__slow"
 			if mode == DiscoveryHybrid {
-				want = "c__echo,call_tool,describe_tools,search_tools"
+				want = "c__echo,call_tool,describe_tools,list_tools,search_tools"
 			}
 			waitFor(t, "tools back", func() bool { return strings.Join(toolNames(t, s), ",") == want })
 			if st := f.sup.Statuses()[0]; st.Restarts != 1 || st.State != "ready" {
