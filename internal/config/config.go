@@ -117,6 +117,41 @@ type Namespace struct {
 	// discovery is full (default), connector, search, or hybrid
 	Discovery   string   `toml:"discovery"`
 	PinnedTools []string `toml:"pinned_tools"`
+	// code mode opts this namespace into sandboxed JS execution of its
+	// allowed tools; zero resource values select runtime defaults
+	CodeMode *CodeMode `toml:"code_mode"`
+}
+
+// code mode bounds the sandboxed execution environment; zero selects the
+// built-in default and negative values are invalid
+type CodeMode struct {
+	Enabled        *bool    `toml:"enabled"`
+	AllowedTools   []string `toml:"allowed_tools"`
+	Timeout        Duration `toml:"timeout"`
+	MemoryMB       int      `toml:"memory_mb"`
+	MaxCalls       int      `toml:"max_calls"`
+	MaxOutputBytes int      `toml:"max_output_bytes"`
+	MaxCodeBytes   int      `toml:"max_code_bytes"`
+	MaxConcurrent  int      `toml:"max_concurrent"`
+}
+
+// on reports whether this namespace opted into code mode
+func (m CodeMode) On() bool { return m.Enabled != nil && *m.Enabled }
+
+// reject negative bounds even when disabled; nonzero memory must be 2–256 MiB
+func (m CodeMode) validate() error {
+	var errs []error
+	if m.Timeout.Duration < 0 || m.MemoryMB < 0 || m.MaxCalls < 0 ||
+		m.MaxOutputBytes < 0 || m.MaxCodeBytes < 0 || m.MaxConcurrent < 0 {
+		errs = append(errs, errors.New("values must not be negative"))
+	}
+	if m.MemoryMB == 1 {
+		errs = append(errs, errors.New("memory_mb must be at least 2"))
+	}
+	if m.MemoryMB > 256 {
+		errs = append(errs, errors.New("memory_mb must not exceed 256"))
+	}
+	return errors.Join(errs...)
 }
 
 var discoveryModes = map[string]bool{"": true, "full": true, "connector": true, "search": true, "hybrid": true}
@@ -334,6 +369,39 @@ func (c *Config) validate() error {
 				errs = append(errs, fmt.Errorf("namespace %q: duplicate pinned tool %q", ns.Name, name))
 			}
 			pins[name] = true
+		}
+		if ns.CodeMode != nil {
+			if err := ns.CodeMode.validate(); err != nil {
+				errs = append(errs, fmt.Errorf("namespace %q: code_mode: %w", ns.Name, err))
+			}
+			if ns.CodeMode.On() && len(ns.CodeMode.AllowedTools) == 0 {
+				errs = append(errs, fmt.Errorf("namespace %q: code_mode enabled requires at least one allowed_tool", ns.Name))
+			}
+			tools := make(map[string]bool, len(ns.CodeMode.AllowedTools))
+			for _, name := range ns.CodeMode.AllowedTools {
+				server, tool, ok := strings.Cut(name, "__")
+				switch {
+				case !ok || tool == "":
+					errs = append(errs, fmt.Errorf("namespace %q: code_mode allowed tool %q must be server__tool", ns.Name, name))
+				case strings.ContainsAny(name, "*?["):
+					errs = append(errs, fmt.Errorf("namespace %q: code_mode allowed tool %q must be an exact name; wildcards are not supported", ns.Name, name))
+				default:
+					found := false
+					for _, s := range ns.Servers {
+						if s == server {
+							found = true
+							break
+						}
+					}
+					if !found {
+						errs = append(errs, fmt.Errorf("namespace %q: code_mode allowed tool %q references a server outside the namespace", ns.Name, name))
+					}
+				}
+				if tools[name] {
+					errs = append(errs, fmt.Errorf("namespace %q: duplicate code_mode allowed tool %q", ns.Name, name))
+				}
+				tools[name] = true
+			}
 		}
 		if len(ns.Servers) == 0 {
 			errs = append(errs, fmt.Errorf("namespace %q: no servers", ns.Name))

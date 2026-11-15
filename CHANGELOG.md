@@ -6,6 +6,7 @@
 
 * add hybrid discovery with explicitly pinned native tools alongside search meta-tools
 * add server-filtered compact tool search and selective schema loading through `describe_tools`
+* add opt-in JavaScript code mode in a bounded, stateless WebAssembly sandbox with exact tool allowlisting and shared audited dispatch
 
 ### Breaking Changes
 

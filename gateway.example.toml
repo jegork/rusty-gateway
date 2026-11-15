@@ -55,6 +55,17 @@ discovery = "search"     # full (default): every server__tool
 # for hybrid, set discovery = "hybrid" above and add:
 # pinned_tools = ["hevy__get_training_summary"]
 
+# opt-in JavaScript orchestration; allow only tools trusted for scripted use
+# [namespace.code_mode]
+# enabled = true
+# allowed_tools = ["hevy__get_training_summary"]
+# timeout = "10s"
+# memory_mb = 32             # per VM, 2–256 MiB; not a process-wide limit
+# max_calls = 20
+# max_output_bytes = 65536   # final output and each tool-result envelope
+# max_code_bytes = 65536
+# max_concurrent = 1         # live VMs per namespace, separate from tool limits
+
 [[namespace]]
 name           = "ops"
 servers        = ["dokploy", "remote-example"]

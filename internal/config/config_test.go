@@ -279,3 +279,36 @@ func TestHybridPinsRejectInvalidConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestCodeModeRejectsInvalidConfiguration(t *testing.T) {
+	base := minimal(writeExec(t))
+	env := map[string]string{"TOK": "t", "SECRET": "s"}
+
+	for _, tc := range []struct {
+		name, settings, want string
+	}{
+		{"enabled without tools", "enabled = true", "requires at least one allowed_tool"},
+		{"unprefixed tool", "enabled = true\nallowed_tools = [\"echo\"]", "must be server__tool"},
+		{"empty tool", "enabled = true\nallowed_tools = [\"a__\"]", "must be server__tool"},
+		{"wildcard tool", "enabled = true\nallowed_tools = [\"a__*\"]", "wildcards are not supported"},
+		{"wildcard server", "enabled = true\nallowed_tools = [\"*__echo\"]", "wildcards are not supported"},
+		{"excluded server", "enabled = true\nallowed_tools = [\"b__echo\"]", "outside the namespace"},
+		{"duplicate tool", "enabled = true\nallowed_tools = [\"a__echo\", \"a__echo\"]", "duplicate code_mode allowed tool"},
+		{"negative memory while disabled", "memory_mb = -1", "must not be negative"},
+		{"negative calls while disabled", "max_calls = -2", "must not be negative"},
+		{"negative output bound while disabled", "max_output_bytes = -1", "must not be negative"},
+		{"negative code size while disabled", "max_code_bytes = -1", "must not be negative"},
+		{"negative concurrency while disabled", "max_concurrent = -1", "must not be negative"},
+		{"negative timeout while disabled", "timeout = \"-5s\"", "must not be negative"},
+		{"memory above cap", "enabled = true\nallowed_tools = [\"a__echo\"]\nmemory_mb = 257", "must not exceed 256"},
+		{"memory below module minimum", "memory_mb = 1", "must be at least 2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := strings.Replace(base, `servers = ["a"]`, "servers = [\"a\"]\n[namespace.code_mode]\n"+tc.settings, 1)
+			_, err := Parse([]byte(src), lookup(env))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+}

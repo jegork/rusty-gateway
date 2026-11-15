@@ -27,6 +27,7 @@ RUN useradd --create-home --uid 1000 gateway \
     && mkdir -p /data /var/cache/uv /var/cache/npm \
     && chown -R gateway:gateway /data /var/cache/uv /var/cache/npm
 COPY --from=build /gateway /usr/local/bin/gateway
+COPY internal/codemode/quickjs.LICENSE /usr/share/doc/rusty-gateway/quickjs.LICENSE
 USER gateway
 WORKDIR /data
 ENV HOME=/home/gateway UV_CACHE_DIR=/var/cache/uv npm_config_cache=/var/cache/npm
