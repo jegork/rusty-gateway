@@ -395,6 +395,9 @@ The full login flow against a real Authelia runs as an integration test
 go test -tags integration -run TestAuthelia ./internal/auth/
 ```
 
+The test pins the Authelia image by digest, so runs are reproducible. Set
+`AUTHELIA_IMAGE` to test against another image explicitly.
+
 ### Cloudflare Managed OAuth for MCP clients
 
 As an alternative to OIDC/static bearer authentication, let Cloudflare Access

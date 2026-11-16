@@ -11,6 +11,10 @@
 * add live paginated `list_tools` browsing for search, hybrid and code-mode namespaces, with stateless keyset cursors
 * report `code_mode_allowed` in list, search, describe and connector listings so discovery agrees with the code-mode allowlist
 
+### Bug Fixes
+
+* pin the Authelia integration test image by digest and whitelist the RFC 8707 resource through the client's `resource` list, which newer Authelia builds keep separate from `audience`
+
 ### Breaking Changes
 
 * `search_tools` no longer returns input schemas; clients must use `describe_tools` for selected tools
