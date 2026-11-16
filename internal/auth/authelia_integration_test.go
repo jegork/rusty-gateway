@@ -86,7 +86,7 @@ identity_providers:
         redirect_uris:
           - 'http://localhost:8432/oauth/callback'
         scopes: ['openid', 'offline_access', 'mcp:use']
-        audience:
+        resource:
           - '{{RESOURCE}}'
         grant_types: ['authorization_code', 'refresh_token']
         response_types: ['code']
@@ -176,7 +176,7 @@ func startAuthelia(t *testing.T, ctx context.Context) (string, *http.Client) {
 	t.Helper()
 	image := os.Getenv("AUTHELIA_IMAGE")
 	if image == "" {
-		image = "authelia/authelia:master"
+		image = "authelia/authelia@sha256:9ed09a63f54203e2bfa3ee5dd2cfb7de04375f64017bff0f2289aad8eb67b662"
 	}
 	port := freePort(t)
 	// authelia insists on an https issuer and a cookie domain with a dot or an ip

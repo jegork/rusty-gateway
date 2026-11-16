@@ -32,7 +32,7 @@ func (g *Gateway) registerCodeMode(ns *nsServer) {
 	ns.server.AddTool(&mcp.Tool{
 		Name:        "execute_code",
 		Title:       "Execute JavaScript",
-		Description: "Execute a JavaScript async function body in a fresh sandbox. Use return for the JSON result and await tools.call(name, arguments) for tool calls. tools.call returns the full MCP result (content and optional structuredContent); tool errors throw. No packages, filesystem, environment, process, or direct network access. Calls are sequential, even in Promise.all. Earlier calls are not rolled back on failure; never blindly retry writes. Allowed tools: " + strings.Join(options.AllowedTools, ", "),
+		Description: "Execute a JavaScript async function body in a fresh sandbox. Use return for the JSON result and await tools.call(name, arguments) for tool calls. tools.call returns the full MCP result (content and optional structuredContent); tool errors throw. No packages, filesystem, environment, process, or direct network access. Calls are sequential, even in Promise.all. Earlier calls are not rolled back on failure; never blindly retry writes. Allowed tools: " + strings.Join(options.AllowedTools, ", ") + "\n\n" + instructions(ns.ns),
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"code":{"type":"string","description":"JavaScript async function body; use return for the result"}},"required":["code"]}`),
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var in struct {

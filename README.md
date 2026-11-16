@@ -98,7 +98,9 @@ Each namespace picks how clients see its tools with `discovery`:
 - `connector`: two meta-tools per server, `{server}__list_tools` and
   `{server}__call`. The client loads a server's real tools only when it
   needs that server.
-- `search`: three meta-tools for the whole namespace:
+- `search`: four meta-tools for the whole namespace:
+  - `list_tools(server?, cursor?, limit?)` browses ready tools as compact
+    pages (see [Browsing and the capability overview](#browsing-and-the-capability-overview)).
   - `search_tools(query, server?, limit?)` returns compact summaries (name,
     server, title and description), without input schemas. Keywords match
     names, titles, descriptions and parameter names. The optional `server`
@@ -107,7 +109,7 @@ Each namespace picks how clients see its tools with `discovery`:
     `server__tool` names in request order. Unknown or unavailable names fail
     the whole request rather than returning partial results.
   - `call_tool(name, arguments)` executes a tool by its `server__tool` name.
-- `hybrid`: the same three meta-tools plus the native schemas of explicitly
+- `hybrid`: the same four meta-tools plus the native schemas of explicitly
   configured `pinned_tools`. Unpinned tools remain searchable, describable
   and callable through the meta-tools; there is no automatic promotion.
 
@@ -122,7 +124,7 @@ name = "personal"
 servers = ["hevy", "renpho", "notion", "tradingview"]
 discovery = "hybrid"
 pinned_tools = [
-  "hevy__get_training_summary",
+  "hevy__get-training-summary",
   "renpho__get_latest_measurement",
 ]
 ```
@@ -135,9 +137,10 @@ advertised, and appears when the upstream reports it as available.
 Typical discovery flow:
 
 ```text
+list_tools({"server":"hevy"})
 search_tools({"query":"recent workouts","server":"hevy","limit":3})
-describe_tools({"names":["hevy__get_workouts"]})
-call_tool({"name":"hevy__get_workouts","arguments":{...}})
+describe_tools({"names":["hevy__get-workouts"]})
+call_tool({"name":"hevy__get-workouts","arguments":{...}})
 ```
 
 Discovery is not an authorization gate: a known tool can be called without
@@ -153,6 +156,70 @@ Meta-tool calls go through the same dispatcher, so limits, timeouts, the
 breaker and the audit log apply, and audit rows record the resolved server
 and tool rather than the meta-tool.
 
+### Browsing and the capability overview
+
+Wrapper tools alone do not tell an agent what a namespace can do, so each
+server may carry a short operator-written description:
+
+```toml
+[servers.hevy]
+description = "Hevy strength training log: workouts and training summaries"
+command = "/usr/local/bin/hevy-mcp"
+```
+
+The gateway turns the namespace's configured servers, in namespace order,
+into a small overview. A server without a description appears by name
+only. The gateway never infers a description from tool names. The overview
+is sent as the MCP server instructions. It is also repeated in the
+`search_tools`, `list_tools` and `execute_code` descriptions, because some
+clients ignore instructions. It never contains tool counts, tool names,
+readiness or schemas. As a result, the advertised tool definitions do not
+change when upstreams refresh.
+
+The overview ends with numbered workflow steps. The steps name only tools
+that the namespace exposes:
+
+- `search` and `hybrid`: `describe_tools` and `call_tool`.
+- `full`: the native `server__tool` tools.
+- `connector`: `{server}__list_tools` and `{server}__call` with the bare
+  upstream tool name.
+
+`list_tools(server?, cursor?, limit?)` is the live counterpart of the
+overview. It is exposed in `search` and `hybrid` namespaces. It is also
+exposed in any namespace with code mode enabled, including `full` and
+`connector`. Without code mode, `full` and `connector` keep their existing
+tool sets.
+
+`list_tools` returns `{"tools": [...], "next_cursor": "..."}`. The tools are
+the ready tools of the namespace, sorted by full `server__tool` name. Each
+item has the name, server, title, description and `code_mode_allowed`.
+Items never include an input schema. An empty page is `{"tools": []}`.
+
+- `limit` defaults to 10 when it is omitted or 0. The maximum is 50.
+  Negative or larger values are rejected.
+- `server` must belong to the namespace. A configured but unavailable
+  server returns an empty page.
+- `next_cursor` is present only when more tools follow. Pass it back
+  unchanged, with the same `server`. The gateway rejects malformed
+  cursors, cursors from another namespace and cursors issued for a
+  different `server` filter.
+- A cursor is a stateless position after the last returned name. It is not
+  a snapshot. Each page reads the live catalog again. Removed tools never
+  cause repeated or skipped tools. Tools added before the cursor appear
+  only when you start again without a cursor.
+
+`code_mode_allowed` is `true` only when the tool is in the namespace's
+enabled `code_mode.allowed_tools`. It is `false` for every tool when code
+mode is off. `search_tools`, `describe_tools` and `{server}__list_tools`
+return the same field. It only says whether `execute_code` may call the
+tool. It is not an authorization change. Every listed tool can still be
+called through the normal path.
+
+Clients cache tool definitions. After an upgrade, rescan or reconnect the
+MCP connection, or approve its actions again. This lets clients see
+`list_tools` and the updated descriptions. A new conversation alone may
+not be enough.
+
 ## Code mode
 
 Code mode is disabled by default and works alongside any discovery mode.
@@ -167,7 +234,7 @@ discovery = "search"
 
 [namespace.code_mode]
 enabled = true
-allowed_tools = ["hevy__get_workouts", "renpho__get_latest_measurement"]
+allowed_tools = ["hevy__get-workouts", "renpho__get_latest_measurement"]
 timeout = "10s"
 memory_mb = 32
 max_calls = 20
@@ -180,7 +247,8 @@ This advertises `execute_code({code})`. Supply a JavaScript async function
 body, with `return` for its JSON result:
 
 ```js
-const workouts = await tools.call("hevy__get_workouts", {page: 1, pageSize: 5});
+// load real arguments with describe_tools before scripting a call
+const workouts = await tools.call("hevy__get-workouts", {});
 const measurement = await tools.call("renpho__get_latest_measurement", {});
 return {
   workouts: workouts.structuredContent ?? workouts.content,
@@ -198,7 +266,8 @@ tool errors without invalidating the client session.
 Error envelopes must also fit `max_output_bytes`. If an error cannot fit,
 execution aborts rather than delivering an oversized error to JavaScript.
 
-Use discovery to inspect tools before writing code. The allowlist is
+Use discovery to inspect tools before writing code. `list_tools` marks
+scriptable tools with `code_mode_allowed`. The allowlist is
 independent of discovery and pinned tools, uses exact `server__tool` names,
 and must contain at least one tool when enabled. Names must be unique and
 refer to servers in the namespace; wildcards and recursive meta-tool
@@ -325,6 +394,9 @@ The full login flow against a real Authelia runs as an integration test
 ```sh
 go test -tags integration -run TestAuthelia ./internal/auth/
 ```
+
+The test pins the Authelia image by digest, so runs are reproducible. Set
+`AUTHELIA_IMAGE` to test against another image explicitly.
 
 ### Cloudflare Managed OAuth for MCP clients
 

@@ -28,6 +28,9 @@ type Namespace struct {
 	Discovery   Discovery // empty means DiscoveryFull
 	PinnedTools []string
 	CodeMode    *CodeMode
+	// optional configured summaries keyed by server name; servers without
+	// one are listed by name only
+	ServerDescriptions map[string]string
 }
 
 type Options struct {
@@ -90,7 +93,7 @@ func New(sup *supervisor.Supervisor, namespaces []Namespace, opts Options) *Gate
 		g.servers[ns.Name] = &nsServer{
 			ns: ns,
 			server: mcp.NewServer(&mcp.Implementation{Name: "rusty-gateway/" + ns.Name, Version: opts.Version},
-				&mcp.ServerOptions{Logger: opts.Logger.With("namespace", ns.Name)}),
+				&mcp.ServerOptions{Logger: opts.Logger.With("namespace", ns.Name), Instructions: instructions(ns)}),
 			sem:        newSemaphore(opts.Limits.namespaceLimit(ns.Name)),
 			registered: map[string]string{},
 		}
